@@ -22,18 +22,9 @@ test('personal-token mode: null until a token is saved, then a personal-token au
   assert.equal(await auth!.accessToken(), 'canvas-test-token-0000');
 }));
 
-test('oauth2 mode: null until signed in and configured; never falls back to the personal token', withStorage(async storage => {
-  storage.updateSettings(s => { s.canvas.baseUrl = 'https://canvas.example.edu'; s.canvas.authMode = 'oauth2'; s.canvas.oauthClientId = '10000000000001'; });
+test('legacy OAuth settings/secrets from older files are ignored and dropped', withStorage(async storage => {
+  storage.saveSettings({ ...storage.loadSettings(), canvas: { ...storage.loadSettings().canvas, baseUrl: 'https://canvas.example.edu', authMode: 'oauth2', oauthClientId: 'x' } } as never);
+  assert.ok(!('authMode' in storage.loadSettings().canvas));
   storage.saveCanvasPersonalToken('canvas-test-token-0000');
-  assert.equal(createCanvasAuth(storage), null, 'not signed in');
-  storage.saveCanvasOAuthTokens({ accessToken: 'oauth-access-test', refreshToken: 'oauth-refresh-test', expiresAt: '2099-01-01T00:00:00Z', userId: '1' });
-  const auth = createCanvasAuth(storage);
-  assert.equal(auth?.kind, 'oauth2');
-  assert.equal(await auth!.accessToken(), 'oauth-access-test');
-}));
-
-test('redirect port setting is validated', withStorage(storage => {
-  assert.equal(storage.loadSettings().canvas.oauthRedirectPort, 51735);
-  assert.equal(storage.updateSettings(s => { s.canvas.oauthRedirectPort = 80; }).canvas.oauthRedirectPort, 51735, 'privileged port rejected');
-  assert.equal(storage.updateSettings(s => { s.canvas.oauthRedirectPort = 52000; }).canvas.oauthRedirectPort, 52000);
+  assert.equal(createCanvasAuth(storage)?.kind, 'personal-token');
 }));

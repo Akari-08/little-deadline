@@ -15,7 +15,7 @@ and reports sensors. Requirements: [`AGENTS.md`](AGENTS.md).
 | Simulated device (firmware protocol rules) + CLI link check | Done |
 | Task store: Mock tasks (add/edit/complete/reset), Canvas snapshots, local check-off, progress | Done, tested |
 | Canvas LMS provider (read-only planner sync, personal access token) | Done, tested against a mock server; **not yet run against a real Canvas** |
-| "Sign in with Canvas" (OAuth2 + PKCE) | Done, tested against a mock; **needs a developer key from the institution** |
+| "Sign in with Canvas" (OAuth2) | Parked (needs a school-issued developer key); preserved in git at `f64a89c` |
 | Pet simulation, Canvas 2D renderer, host API, browser UI, tilt input | **Not started** |
 | Notion | Not started |
 | Physical hardware | **Not yet verified** (no device has been tested with this app) |
@@ -94,7 +94,8 @@ TaskPet **only reads** Canvas: it never submits work, changes grades, or writes 
 Canvas. Items submitted, excused, or marked done in Canvas drop off the active list on the next
 refresh. Checking an item off in TaskPet is local only. Details: [`docs/canvas-lms.md`](docs/canvas-lms.md).
 
-Personal access token (works now; for your own use only):
+Each user creates their own personal access token in Canvas and enters it into their own copy
+of TaskPet. It is stored only on that computer and sent only to their school's Canvas.
 
 ```powershell
 npm run configure -- canvas-url https://<your-school-canvas>
@@ -102,19 +103,11 @@ npm run configure -- canvas-token      # Canvas: Account > Settings > Approved I
 npm run canvas-check                   # read-only summary of what's due
 ```
 
-Sign in with Canvas (for multiple users; requires a developer key issued by the school —
-see [`docs/canvas-oauth-setup.md`](docs/canvas-oauth-setup.md)):
-
-```powershell
-npm run configure -- canvas-auth oauth2
-npm run configure -- canvas-client-id <id from the school>
-npm run configure -- canvas-client-secret   # only if the key has one (input hidden)
-npm run canvas-login                         # opens your school's normal login page in the browser
-npm run canvas-login -- status
-npm run canvas-login -- logout
-```
-
-TaskPet never asks for or stores your school password; you log in on the school's own page.
+A personal token can do anything you can do in Canvas (TaskPet only reads with it), so give it
+an expiry date (e.g. end of term) and revoke it in Canvas if your computer is lost. TaskPet never
+asks for your school password. Instructure's API policy expects OAuth sign-in for apps used by
+many people; that implementation is parked (see `src/canvas/auth.ts`) until a developer key is
+available.
 
 ## Behaviour summary
 

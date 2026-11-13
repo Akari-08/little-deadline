@@ -7,6 +7,12 @@ on 2026-11-13; re-verify before implementing. Instructure is moving its docs fro
 
 ## Design
 
+- **Auth: per-user personal access tokens.** Each user creates a token in Canvas and enters
+  it into their own local copy of TaskPet. A school-issued OAuth developer key is not
+  available, so "Sign in with Canvas" (OAuth2 + PKCE) is parked in git history at `f64a89c`
+  (restore command in `src/canvas/auth.ts`). Caveat: the Canvas API Policy expects OAuth
+  for apps used by multiple people, and personal tokens carry the user's full Canvas
+  permissions — recommend expiry dates and a small user group until OAuth is possible.
 - Runs in the **host process only**. The Canvas token never reaches the UI bundle,
   the ESP32, logs, URLs or the repo. It lives in the local secret store next to
   (but separate from) the device token.
@@ -36,8 +42,8 @@ on 2026-11-13; re-verify before implementing. Instructure is moving its docs fro
 | User-Agent | Instructure announced User-Agent enforcement for API requests (dates moved during 2026); always send a descriptive one. Exact enforcement **unconfirmed**. | [Release notes 2026-05-16](https://community.instructure.com/en/discussion/665887/canvas-release-notes-2026-05-16) |
 | Planner overrides | `POST /api/v1/planner/overrides` (`plannable_type`, `plannable_id`, `marked_complete`, `dismissed`); `PUT`/`DELETE /api/v1/planner/overrides/:id`. Documented as planner display state; an explicit "does not affect grades" statement was **not found**. | [Planner](https://canvas.instructure.com/doc/api/planner.html) |
 
-## Open questions for the user
+## Decisions
 
-1. Which Canvas host does your school use (e.g. `https://<school>.instructure.com`)?
-2. Can you create a personal access token there (some schools restrict it)?
-3. Should completed items ever be mirrored to Canvas planner "done" (opt-in), or stay local-only?
+- Personal access tokens are allowed at the user's institution and are the active auth method.
+- Read-only: nothing is written to Canvas. Items submitted, excused, or marked done in Canvas
+  drop off the active list on the next refresh; checking off in TaskPet stays local.

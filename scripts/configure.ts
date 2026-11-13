@@ -7,11 +7,8 @@
  *   npm run configure -- fps 5
  * Canvas LMS (coursework; unrelated to the Canvas 2D render surface):
  *   npm run configure -- canvas-url https://<school>.instructure.com
- *   npm run configure -- canvas-auth personal-token   (or oauth2)
  *   npm run configure -- canvas-token                 (masked prompt; personal access token)
  *   npm run configure -- clear-canvas-token
- *   npm run configure -- canvas-client-id <id>        (OAuth2 developer key ID from your school)
- *   npm run configure -- canvas-client-secret         (masked prompt)
  * Tokens/secrets are stored in the per-user secrets file, separate from settings, outside the repo.
  */
 import { AppStorage } from '../src/host/storage.ts';
@@ -36,11 +33,7 @@ function show(): void {
   console.log('');
   console.log('Canvas LMS (coursework)');
   console.log(`  Address:            ${canvas.baseUrl || '(not set)'}`);
-  console.log(`  Sign-in method:     ${canvas.authMode}`);
   console.log(`  Access token:       ${secrets.canvasPersonalTokenSet ? 'set (hidden)' : '(not set)'}`);
-  console.log(`  OAuth client ID:    ${canvas.oauthClientId || '(not set)'}`);
-  console.log(`  OAuth client secret:${secrets.canvasClientSecretSet ? ' set (hidden)' : ' (not set)'}`);
-  console.log(`  OAuth signed in:    ${secrets.canvasSignedIn ? 'yes' : 'no'}`);
   console.log(`  Window:             ${canvas.lookbackDays} days back, ${canvas.lookaheadDays} days ahead; refresh every ${canvas.refreshMinutes} min`);
   for (const warning of storage.warnings) console.warn(`Warning: ${warning}`);
 }
@@ -117,12 +110,6 @@ try {
       console.log(`Canvas address saved: ${parsed.origin}`);
       break;
     }
-    case 'canvas-auth': {
-      if (value !== 'personal-token' && value !== 'oauth2') throw new Error('Usage: npm run configure -- canvas-auth personal-token|oauth2');
-      storage.updateSettings(s => { s.canvas.authMode = value; });
-      console.log(`Canvas sign-in method saved: ${value}`);
-      break;
-    }
     case 'canvas-token': {
       console.log('Create a token in Canvas: Account > Settings > Approved Integrations > New Access Token. It is shown only once.');
       const token = (await readSecret('Paste the Canvas access token (input hidden): ')).trim();
@@ -134,21 +121,8 @@ try {
       storage.saveCanvasPersonalToken(null);
       console.log('Canvas access token removed. (Revoke it in Canvas too if you no longer need it.)');
       break;
-    case 'canvas-client-id': {
-      const id = (value ?? '').trim();
-      if (!/^[!-~]{1,200}$/.test(id)) throw new Error('Usage: npm run configure -- canvas-client-id <developer key client ID>');
-      storage.updateSettings(s => { s.canvas.oauthClientId = id; });
-      console.log(`Canvas OAuth client ID saved: ${id}`);
-      break;
-    }
-    case 'canvas-client-secret': {
-      const secret = (await readSecret('Paste the Canvas OAuth client secret (input hidden): ')).trim();
-      storage.saveCanvasOAuthClientSecret(secret);
-      console.log(`Canvas OAuth client secret saved to ${storage.secretsPath} (not shown).`);
-      break;
-    }
     default:
-      throw new Error(`Unknown command "${command}". Use: show | address <addr> | token | clear-token | fps <n> | canvas-url <url> | canvas-auth personal-token|oauth2 | canvas-token | clear-canvas-token | canvas-client-id <id> | canvas-client-secret`);
+      throw new Error(`Unknown command "${command}". Use: show | address <addr> | token | clear-token | fps <n> | canvas-url <url> | canvas-token | clear-canvas-token`);
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

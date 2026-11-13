@@ -7,8 +7,7 @@
  * and replaced with defaults; a corrupt secrets file is deleted (no stray credential copies).
  *
  * Secrets held here (host process only — never sent to UI code, the ESP32, logs or URLs):
- * the ESP32 device token, a Canvas LMS personal access token, Canvas OAuth2 tokens, and a
- * Canvas OAuth2 client secret.
+ * the ESP32 device token and the user's Canvas LMS personal access token.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -18,8 +17,6 @@ import { DEFAULT_TARGET_FPS, MAX_TARGET_FPS, MIN_TARGET_FPS } from '../device/st
 
 export const SETTINGS_SCHEMA_VERSION = 1;
 export const SECRETS_SCHEMA_VERSION = 1;
-
-export type CanvasAuthMode = 'personal-token' | 'oauth2';
 
 export interface AppSettings {
   schemaVersion: typeof SETTINGS_SCHEMA_VERSION;
@@ -34,14 +31,6 @@ export interface AppSettings {
   canvas: {
     /** Institution origin, e.g. https://canvas.example.edu ('' = unconfigured). */
     baseUrl: string;
-    authMode: CanvasAuthMode;
-    /** OAuth2 developer key client ID issued by the institution ('' = not available). */
-    oauthClientId: string;
-    /**
-     * Port of the loopback redirect URI registered on the developer key
-     * (http://127.0.0.1:<port>/oauth/callback). Sign-in and refresh must use the same one.
-     */
-    oauthRedirectPort: number;
     /** Fetch window around today. */
     lookbackDays: number;
     lookaheadDays: number;
@@ -50,43 +39,28 @@ export interface AppSettings {
   };
 }
 
-/** Canvas OAuth2 tokens for the signed-in user. */
-export interface CanvasOAuthTokens {
-  accessToken: string;
-  /** Long-lived; used to obtain new access tokens (Canvas access tokens last ~1 h). */
-  refreshToken: string | null;
-  /** ISO 8601 UTC expiry of accessToken, or null if unknown. */
-  expiresAt: string | null;
-  /** Canvas user id the tokens belong to (not a secret, kept for display/consistency). */
-  userId: string | null;
-}
-
 export interface Secrets {
   schemaVersion: typeof SECRETS_SCHEMA_VERSION;
   deviceToken: string | null;
   canvasPersonalToken: string | null;
-  canvasOAuth: CanvasOAuthTokens | null;
-  canvasOAuthClientSecret: string | null;
 }
 
 /** Safe-to-display secret presence flags. Never contains secret values. */
 export interface SecretsSummary {
   deviceTokenSet: boolean;
   canvasPersonalTokenSet: boolean;
-  canvasSignedIn: boolean;
-  canvasClientSecretSet: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
   device: { address: '', autoConnect: false },
   streaming: { targetFps: DEFAULT_TARGET_FPS },
-  canvas: { baseUrl: '', authMode: 'personal-token', oauthClientId: '', oauthRedirectPort: 51735, lookbackDays: 7, lookaheadDays: 21, refreshMinutes: 15 },
+  canvas: { baseUrl: '', lookbackDays: 7, lookaheadDays: 21, refreshMinutes: 15 },
 };
 
 const EMPTY_SECRETS: Secrets = {
   schemaVersion: SECRETS_SCHEMA_VERSION,
-  deviceToken: null, canvasPersonalToken: null, canvasOAuth: null, canvasOAuthClientSecret: null,
+  deviceToken: null, canvasPersonalToken: null,
 };
 
 export function defaultDataDir(
@@ -131,11 +105,6 @@ export function normalizeSettings(raw: unknown): AppSettings {
   if (isObj(raw.canvas)) {
     const c = raw.canvas, d = DEFAULT_SETTINGS.canvas;
     if (typeof c.baseUrl === 'string') settings.canvas.baseUrl = c.baseUrl.trim().slice(0, 300);
-    if (c.authMode === 'personal-token' || c.authMode === 'oauth2') settings.canvas.authMode = c.authMode;
-    if (typeof c.oauthClientId === 'string') settings.canvas.oauthClientId = c.oauthClientId.trim().slice(0, 200);
-    if (typeof c.oauthRedirectPort === 'number' && Number.isInteger(c.oauthRedirectPort) && c.oauthRedirectPort >= 1024 && c.oauthRedirectPort <= 65535) {
-      settings.canvas.oauthRedirectPort = c.oauthRedirectPort;
-    }
     settings.canvas.lookbackDays = clampInt(c.lookbackDays, 0, 60, d.lookbackDays);
     settings.canvas.lookaheadDays = clampInt(c.lookaheadDays, 1, 120, d.lookaheadDays);
     settings.canvas.refreshMinutes = clampInt(c.refreshMinutes, 5, 240, d.refreshMinutes);
@@ -149,15 +118,6 @@ function normalizeSecrets(raw: unknown): Secrets {
   const str = (value: unknown) => (typeof value === 'string' && value.length > 0 ? value : null);
   secrets.deviceToken = str(raw.deviceToken);
   secrets.canvasPersonalToken = str(raw.canvasPersonalToken);
-  secrets.canvasOAuthClientSecret = str(raw.canvasOAuthClientSecret);
-  if (isObj(raw.canvasOAuth) && str(raw.canvasOAuth.accessToken)) {
-    secrets.canvasOAuth = {
-      accessToken: raw.canvasOAuth.accessToken as string,
-      refreshToken: str(raw.canvasOAuth.refreshToken),
-      expiresAt: str(raw.canvasOAuth.expiresAt),
-      userId: str(raw.canvasOAuth.userId),
-    };
-  }
   return secrets;
 }
 
@@ -231,30 +191,12 @@ export class AppStorage {
     this.updateSecrets(secrets => { secrets.canvasPersonalToken = token; });
   }
 
-  loadCanvasOAuthTokens(): CanvasOAuthTokens | null { return this.loadSecrets().canvasOAuth; }
-
-  saveCanvasOAuthTokens(tokens: CanvasOAuthTokens | null): void {
-    this.updateSecrets(secrets => { secrets.canvasOAuth = tokens ? { ...tokens } : null; });
-  }
-
-  loadCanvasOAuthClientSecret(): string | null { return this.loadSecrets().canvasOAuthClientSecret; }
-
-  saveCanvasOAuthClientSecret(secret: string | null): void {
-    if (secret !== null) {
-      const problem = checkApiCredential(secret, 'The OAuth client secret');
-      if (problem) throw new Error(problem);
-    }
-    this.updateSecrets(secrets => { secrets.canvasOAuthClientSecret = secret; });
-  }
-
   /** Safe for display: which secrets are present, never their values. */
   describeSecrets(): SecretsSummary {
     const secrets = this.loadSecrets();
     return {
       deviceTokenSet: this.loadDeviceToken() !== null,
       canvasPersonalTokenSet: secrets.canvasPersonalToken !== null,
-      canvasSignedIn: secrets.canvasOAuth !== null,
-      canvasClientSecretSet: secrets.canvasOAuthClientSecret !== null,
     };
   }
 

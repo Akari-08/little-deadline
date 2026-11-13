@@ -150,9 +150,7 @@ export class CanvasTaskProvider implements TaskProvider {
       return {
         ok: false,
         reason: 'credentials',
-        message: settings.authMode === 'oauth2'
-          ? 'Canvas LMS is not signed in: sign in with Canvas to load your tasks.'
-          : 'Canvas LMS has no access token: create one in Canvas (Account > Settings > Approved Integrations) and save it with: npm run configure -- canvas-token',
+        message: 'Canvas LMS has no access token: create one in Canvas (Account > Settings > Approved Integrations) and save it with: npm run configure -- canvas-token',
       };
     }
     return { ok: true, origin: parsed.origin, auth, settings };

@@ -15,8 +15,7 @@
     "configure": "node scripts/configure.ts",
     "fake-device": "node scripts/fake-device.ts",
     "link-check": "node scripts/link-check.ts",
-    "canvas-check": "node scripts/canvas-check.ts",
-    "canvas-login": "node scripts/canvas-login.ts"
+    "canvas-check": "node scripts/canvas-check.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

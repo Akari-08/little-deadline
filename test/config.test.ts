@@ -141,15 +141,12 @@ test('Canvas secrets are stored beside the device token without clobbering it', 
   try {
     storage.saveDeviceToken(TEST_TOKEN);
     storage.saveCanvasPersonalToken('canvas-test-token-0000');
-    storage.saveCanvasOAuthTokens({ accessToken: 'oauth-access-test', refreshToken: 'oauth-refresh-test', expiresAt: '2030-01-01T00:00:00Z', userId: '1' });
-    storage.saveCanvasOAuthClientSecret('client-secret-test');
     storage.updateSettings(s => { s.canvas.baseUrl = 'https://canvas.example.edu'; });
     assert.equal(storage.loadDeviceToken(), TEST_TOKEN);
     assert.equal(storage.loadCanvasPersonalToken(), 'canvas-test-token-0000');
-    assert.equal(storage.loadCanvasOAuthTokens()?.refreshToken, 'oauth-refresh-test');
-    assert.deepEqual(storage.describeSecrets(), { deviceTokenSet: true, canvasPersonalTokenSet: true, canvasSignedIn: true, canvasClientSecretSet: true });
+    assert.deepEqual(storage.describeSecrets(), { deviceTokenSet: true, canvasPersonalTokenSet: true });
     const settingsText = readFileSync(storage.settingsPath, 'utf8');
-    for (const secret of [TEST_TOKEN, 'canvas-test-token-0000', 'oauth-access-test', 'client-secret-test']) {
+    for (const secret of [TEST_TOKEN, 'canvas-test-token-0000']) {
       assert.ok(!settingsText.includes(secret), 'no secret in settings.json');
       assert.ok(!JSON.stringify(storage.describeSecrets()).includes(secret));
     }
@@ -162,7 +159,7 @@ test('Canvas secrets are stored beside the device token without clobbering it', 
 test('Canvas settings defaults and clamping', () => {
   const { storage, cleanup } = tempStorage();
   try {
-    assert.deepEqual(storage.loadSettings().canvas, { baseUrl: '', authMode: 'personal-token', oauthClientId: '', oauthRedirectPort: 51735, lookbackDays: 7, lookaheadDays: 21, refreshMinutes: 15 });
+    assert.deepEqual(storage.loadSettings().canvas, { baseUrl: '', lookbackDays: 7, lookaheadDays: 21, refreshMinutes: 15 });
     const saved = storage.updateSettings(s => { s.canvas.lookaheadDays = 9999; s.canvas.refreshMinutes = 1; });
     assert.equal(saved.canvas.lookaheadDays, 120);
     assert.equal(saved.canvas.refreshMinutes, 5);

@@ -1,7 +1,9 @@
 /**
  * Canvas LMS personal access token auth: a token the user generated for their OWN use in Canvas
- * (Account > Settings > Approved Integrations > New Access Token). Single user only; apps used
- * by many people must use OAuth2 instead (see src/canvas/auth.ts).
+ * (Account > Settings > Approved Integrations > New Access Token). Each user supplies their own
+ * token to their own local copy of TaskPet; it never leaves their machine except as a Bearer
+ * header to their school's Canvas. Note: Instructure's API policy expects OAuth for apps used by
+ * many people (parked; see src/canvas/auth.ts).
  *
  * The token is read from the host-side secret store on every request, so saving a new token
  * takes effect without restarting. It cannot be refreshed: a 401 means the user must create a

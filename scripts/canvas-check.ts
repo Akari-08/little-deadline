@@ -14,12 +14,6 @@ const storage = new AppStorage();
 const settings = storage.loadSettings();
 for (const warning of storage.warnings) console.warn(`Warning: ${warning}`);
 
-if (settings.canvas.authMode === 'oauth2' && !storage.describeSecrets().canvasSignedIn) {
-  console.log('Canvas is set to "Sign in with Canvas" but you are not signed in. Run: npm run canvas-login');
-  console.log('To use a personal access token instead: npm run configure -- canvas-auth personal-token');
-  process.exit(1);
-}
-
 const provider = new CanvasTaskProvider({
   loadSettings: () => storage.loadSettings().canvas,
   createAuth: () => createCanvasAuth(storage),
