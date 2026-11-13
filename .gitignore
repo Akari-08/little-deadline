@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+
+# Local app data and credentials. The app stores them outside the repo by default
+# (see README); these patterns guard against an in-repo TASKPET_DATA_DIR.
+.taskpet-data/
+secrets.json
+secrets.json.*
+settings.json.tmp-*
+*.local.json
+.env
+.env.*

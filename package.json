@@ -1,0 +1,25 @@
+{
+  "name": "taskpet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TaskPet: a desktop companion pet mirrored to an ESP32 display over TaskPet Link v1.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-timeout=20000 \"test/**/*.test.ts\"",
+    "test:link": "node --test device-link/taskpet-link.test.mjs && node device-link/loopback-test.mjs",
+    "check": "npm run typecheck && npm test && npm run test:link",
+    "configure": "node scripts/configure.ts",
+    "fake-device": "node scripts/fake-device.ts",
+    "link-check": "node scripts/link-check.ts",
+    "canvas-check": "node scripts/canvas-check.ts",
+    "canvas-login": "node scripts/canvas-login.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
