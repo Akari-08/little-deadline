@@ -15,14 +15,14 @@ class MusicController(Protocol):
     def toggle_playback(self) -> None: ...
     def next_track(self) -> None: ...
     def previous_track(self) -> None: ...
-    def change_volume(self, delta: int) -> None: ...
+    def change_volume(self, delta: float) -> None: ...
 
 
 @dataclass
 class RecordingMusicController:
     """A safe default that records commands without controlling the OS."""
 
-    commands: list[tuple[str, int | None]] = field(default_factory=list)
+    commands: list[tuple[str, float | None]] = field(default_factory=list)
 
     def toggle_playback(self) -> None:
         self.commands.append(("toggle_playback", None))
@@ -33,10 +33,10 @@ class RecordingMusicController:
     def previous_track(self) -> None:
         self.commands.append(("previous_track", None))
 
-    def change_volume(self, delta: int) -> None:
+    def change_volume(self, delta: float) -> None:
         self.commands.append(("change_volume", delta))
 
-    def handle(self, action: str) -> None:
+    def handle(self, action: str, value: float | None = None) -> None:
         actions = {
             "music_toggle": self.toggle_playback,
             "music_next": self.next_track,
@@ -44,7 +44,5 @@ class RecordingMusicController:
         }
         if action in actions:
             actions[action]()
-        elif action == "volume_up":
-            self.change_volume(1)
-        elif action == "volume_down":
-            self.change_volume(-1)
+        elif action == "volume_change":
+            self.change_volume(value or 0.0)
