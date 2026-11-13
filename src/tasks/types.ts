@@ -6,7 +6,7 @@
  * back to a remote service unless an explicitly configured remote-write feature does so.
  */
 
-export type TaskProviderId = 'mock' | 'canvas';
+export type TaskProviderId = 'mock' | 'canvas' | 'notion';
 
 export type TaskKind = 'assignment' | 'quiz' | 'discussion' | 'event' | 'note' | 'page' | 'other';
 

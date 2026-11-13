@@ -11,3 +11,7 @@ settings.json.tmp-*
 *.local.json
 .env
 .env.*
+!.env.example
+artifacts/
+__pycache__/
+*.py[cod]

@@ -16,9 +16,10 @@ import type { ProviderSnapshot, RemoteTask, TaskKind, TaskProviderId } from './t
 
 export const TASKS_SCHEMA_VERSION = 1;
 
-export type DoneReason = 'checked-in-taskpet' | 'submitted' | 'done-in-canvas' | 'excused';
+export type DoneReason = 'checked-in-taskpet' | 'submitted' | 'done-in-canvas' | 'done-in-notion' | 'excused';
 
 export interface TaskView {
+  priority: 'low' | 'normal' | 'high';
   /** `mock:<uuid>` or `canvas:<plannable_type>:<id>`; stable across refreshes. */
   id: string;
   provider: TaskProviderId;
@@ -55,12 +56,14 @@ export interface TaskStoreEvents extends Record<string, unknown> {
 }
 
 export interface MockTaskInput {
+  priority?: 'low' | 'normal' | 'high';
   title: string;
   course?: string | null;
   dueAt?: string | null;
 }
 
 interface MockTask {
+  priority: 'low' | 'normal' | 'high';
   id: string;
   title: string;
   course: string | null;
@@ -197,6 +200,7 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
       title: patch.title ?? task.title,
       course: patch.course !== undefined ? patch.course : task.course,
       dueAt: patch.dueAt !== undefined ? patch.dueAt : task.dueAt,
+      priority: patch.priority ?? task.priority,
     });
     Object.assign(task, fields);
     this.commit([]);
@@ -251,7 +255,8 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
 
   private remoteView(provider: TaskProviderId, task: RemoteTask): TaskView {
     const id = remoteId(provider, task.key);
-    const remoteReason = remoteDoneReason(task);
+    const reason = remoteDoneReason(task);
+    const remoteReason = reason === 'done-in-canvas' && provider === 'notion' ? 'done-in-notion' : reason;
     const localDone = this.data.local[id]?.completedAt != null;
     const doneReason: DoneReason | null = remoteReason ?? (localDone ? 'checked-in-taskpet' : null);
     return {
@@ -261,6 +266,7 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
       missing: task.status.missing && doneReason === null,
       late: task.status.late,
       editable: false,
+      priority: 'normal',
     };
   }
 
@@ -271,6 +277,7 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
       dueAt: task.dueAt, url: null, points: null,
       done, doneReason: done ? 'checked-in-taskpet' : null,
       missing: false, late: false, editable: true,
+      priority: task.priority,
     };
   }
 
@@ -307,7 +314,7 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
     }
   }
 
-  private validMockFields(input: MockTaskInput): Pick<MockTask, 'title' | 'course' | 'dueAt'> {
+  private validMockFields(input: MockTaskInput): Pick<MockTask, 'title' | 'course' | 'dueAt' | 'priority'> {
     const title = typeof input.title === 'string' ? input.title.trim() : '';
     if (!title) throw new Error('A task needs a title');
     if (title.length > MAX_TITLE) throw new Error(`Titles are limited to ${MAX_TITLE} characters`);
@@ -317,7 +324,8 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
       dueAt = isoOrNull(input.dueAt);
       if (dueAt === null) throw new Error('Due date is not a valid date/time');
     }
-    return { title, course, dueAt };
+    if (input.priority !== undefined && !['low', 'normal', 'high'].includes(input.priority)) throw new Error('Invalid priority');
+    return { title, course, dueAt, priority: input.priority ?? 'normal' };
   }
 
   private sampleMockTasks(): MockTask[] {
@@ -328,7 +336,7 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
     };
     const created = now.toISOString();
     const make = (title: string, course: string | null, dueAt: string | null): MockTask =>
-      ({ id: `mock:${randomUUID()}`, title, course, dueAt, completedAt: null, createdAt: created });
+      ({ id: `mock:${randomUUID()}`, title, course, dueAt, priority: 'normal', completedAt: null, createdAt: created });
     return [
       make('Lab report draft', 'Sample course 101', at(-1, 23)),
       make('Read chapter 3', 'Sample course 101', at(1, 9)),
@@ -348,6 +356,7 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
           course: typeof t.course === 'string' ? t.course.slice(0, 120) : null,
           dueAt: isoOrNull(t.dueAt), completedAt: isoOrNull(t.completedAt),
           createdAt: isoOrNull(t.createdAt) ?? new Date(0).toISOString(),
+          priority: t.priority === 'high' || t.priority === 'low' ? t.priority : 'normal',
         });
       }
       file.mock.initialized = raw.mock.initialized === true;
@@ -355,6 +364,10 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
     if (isObj(raw.snapshots) && isObj(raw.snapshots.canvas)) {
       const snapshot = normalizeSnapshot(raw.snapshots.canvas, 'canvas');
       if (snapshot) file.snapshots.canvas = snapshot;
+    }
+    if (isObj(raw.snapshots) && isObj(raw.snapshots.notion)) {
+      const snapshot = normalizeSnapshot(raw.snapshots.notion, 'notion');
+      if (snapshot) file.snapshots.notion = snapshot;
     }
     if (isObj(raw.local)) {
       for (const [id, value] of Object.entries(raw.local)) {
@@ -402,7 +415,7 @@ function compareTasks(a: TaskView, b: TaskView): number {
 const KINDS: readonly TaskKind[] = ['assignment', 'quiz', 'discussion', 'event', 'note', 'page', 'other'];
 
 /** Validate a persisted snapshot; invalid tasks are dropped. */
-function normalizeSnapshot(raw: Record<string, unknown>, provider: 'canvas'): ProviderSnapshot | null {
+function normalizeSnapshot(raw: Record<string, unknown>, provider: 'canvas' | 'notion'): ProviderSnapshot | null {
   const fetchedAt = isoOrNull(raw.fetchedAt);
   if (!fetchedAt || !Array.isArray(raw.tasks)) return null;
   const tasks: RemoteTask[] = [];

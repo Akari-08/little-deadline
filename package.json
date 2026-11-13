@@ -1,24 +1,38 @@
 {
-  "name": "taskpet",
+  "name": "lil-deadline",
   "version": "0.1.0",
   "private": true,
-  "description": "TaskPet: a desktop companion pet mirrored to an ESP32 display over TaskPet Link v1.",
+  "description": "Lil Deadline: your local study companion and ESP32 dashboard.",
   "type": "module",
   "engines": {
-    "node": ">=22.18.0"
+    "node": ">=22.14.0"
   },
   "scripts": {
+    "dev": "tsx scripts/serve.ts --dev",
+    "build": "npm run typecheck && vite build",
+    "start": "tsx scripts/serve.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --test --test-timeout=20000 \"test/**/*.test.ts\"",
+    "test": "tsx --test --test-timeout=20000 test/*.test.ts",
     "test:link": "node --test device-link/taskpet-link.test.mjs && node device-link/loopback-test.mjs",
     "check": "npm run typecheck && npm test && npm run test:link",
-    "configure": "node scripts/configure.ts",
-    "fake-device": "node scripts/fake-device.ts",
-    "link-check": "node scripts/link-check.ts",
-    "canvas-check": "node scripts/canvas-check.ts"
+    "configure": "tsx scripts/configure.ts",
+    "fake-device": "tsx scripts/fake-device.ts",
+    "link-check": "tsx scripts/link-check.ts",
+    "canvas-check": "tsx scripts/canvas-check.ts"
+  },
+  "dependencies": {
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/manrope": "^5.3.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tsx": "^4.20.6",
+    "vite": "^7.2.2"
   },
   "devDependencies": {
-    "@types/node": "^26.6.6",
-    "typescript": "^7.0.2"
+    "@napi-rs/canvas": "^1.1.1",
+    "@types/node": "^22.19.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "typescript": "^5.9.3"
   }
 }

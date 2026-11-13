@@ -148,6 +148,7 @@ export class FrameStreamer {
         this.nextDueAt = now;
         this.samples = [];
         this.ackTimes = [];
+        this.lastAckAt = null;
       }
       const interval = 1000 / this.targetFps;
       if (now < this.nextDueAt) {

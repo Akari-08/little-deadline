@@ -1,59 +1,165 @@
-# TaskPet
+# Lil Deadline
 
-TaskPet is a local-first Tamagotchi-style study companion. It reads
-coursework deadlines, maintains a local task and pet state, interprets
-computer-vision interactions, and can mirror a 240x320 dashboard to an ESP32
-over Wi-Fi.
+A cozy local study dashboard with Sprout, a pixel companion who grows with your
+progress. React + TypeScript renders one opaque **240×320 Canvas 2D surface**;
+the Node.js host mirrors those same pixels to the existing ESP32 using
+**TaskPet Link v1**. Branding lives in [src/branding.ts](src/branding.ts).
 
-The computer owns application logic, rendering, persistence, integrations, and
-CV processing. The ESP32 is only a display and sensor bridge running
-**TaskPet Link v1**.
+The app works without hardware. The ESP32 firmware is already installed and
+does not need modification or reflashing. External IMU/environment sensors and
+the physical button are absent in the current hardware setup; unavailable values
+are expected. Mouse and keyboard controls drive pet interaction.
 
 ## Project status
 
-| Area | Status |
-| --- | --- |
-| TaskPet Link connection, reconnects, and ACK-paced streaming | Implemented and tested with a simulator |
-| Sensor validation and stale/reboot handling | Implemented and tested |
-| Local settings and separate secret storage | Implemented and tested |
-| Simulated device and diagnostic link check | Implemented |
-| Mock tasks, local completion, and progress | Implemented and tested |
-| Canvas LMS read-only planner sync | Implemented and tested with a mock server |
-| Computer vision: face detection, expression recognition, smoothing, and responses | Implemented; hardware smoke test is separate |
-| Computer vision: hand gestures and music-control events | Implemented and unit tested |
-| Pet simulation, browser UI, and tilt input | Not started |
-| Notion synchronization | Not started |
-| Physical ESP32 and webcam validation | Not yet completed |
+- Responsive dashboard, animated pet, progress ring, selected task, and focus timer.
+- Persistent local task add/edit/complete/reopen/delete, categories, due dates,
+  priorities, filters, and a clearly labelled Mock demo starter set.
+- Host-owned device connection, ACK-paced 5 fps stream, bounded retries, and
+  diagnostics with stale/frozen display indicators.
+- Backend camera proxy for the supplied authenticated 320×240 MJPEG stream.
+- Canvas LMS and Notion read-only task imports with backend-only credentials,
+  pagination, timeouts, rate-limit handling, and persisted last-good snapshots.
+- Separate legacy Python CV package retained in `CV/`; it is not connected to
+  this dashboard. Camera viewing does not record video or recognize faces.
 
-Canvas LMS integration is read-only. TaskPet does not submit coursework, change
-grades, or write to Canvas.
+Checking a task locally never submits Canvas coursework, changes grades, or
+writes to Notion. Both real integrations remain unconfigured until you add
+your credentials in Settings.
 
 ## Requirements
 
-- Node.js 22.18 or newer
+- Node.js 22.14 or newer (22.18+ recommended)
 - npm
-- Python 3.10 or newer for the CV package
 - An ESP32 running the supplied bridge firmware for hardware use
-- A webcam and the CV dependencies for live CV use
+
+Python and CV dependencies are optional, only for the separate `CV/` tools.
 
 Hardware is not required for development or automated tests.
 
 ## Quick start
 
-From the repository root:
+From the repository root, in Windows PowerShell:
 
 ```powershell
-npm install
-npm run check
+npm.cmd ci
+npm.cmd run dev
 ```
 
-`npm run check` runs the TypeScript checks, application tests, connector tests,
-and the local WebSocket loopback test.
+Open **http://127.0.0.1:3210**. Use `npm` instead of `npm.cmd` on macOS/Linux or
+in shells where `npm` is allowed. The Windows spelling avoids PowerShell's
+`npm.ps1` execution-policy restriction; no policy changes are needed.
+
+The development command serves the React frontend and Node API on one loopback
+origin. Frontend source changes are picked up on page reload; restart the command
+after backend changes. Stop the server with Ctrl+C.
+
+### Production build and run
+
+```powershell
+npm.cmd run build
+npm.cmd start
+```
+
+The build checks TypeScript and writes the frontend to `dist/`. `start` serves
+those assets plus the local Node backend. Keep the Node host running: uploading
+only `dist/` to public static hosting cannot connect to the device on your LAN.
+Fonts are bundled; preview mode needs no cloud service or Internet connection.
+
+Optional: copy [.env.example](.env.example) to `.env` and set
+`LIL_DEADLINE_PORT` or `TASKPET_DATA_DIR`. Keep credentials in the app's masked
+Settings fields, not in `.env`, command arguments, or public build variables.
+
+### Everyday use
+
+1. Add or edit tasks in **Your day**. Select a task to put it on Sprout's face.
+2. Complete a task to earn sprout points and trigger a celebration. Reopen a
+   locally completed task using the same checkbox.
+3. Start, pause, or reset a 25-minute focus session. Its deadline is saved on
+   the host and survives browser reloads and host restarts.
+4. Greet Sprout with the heart button or **H**. Use **← / →** or the two arrow
+   buttons to play. **Space** starts/pauses focus. Shortcuts are disabled while
+   typing or editing a task.
+5. Choose **Mock / local**, **Canvas LMS**, or **Notion** below the task list.
+   The Mock starter set is demo data; it can be replaced with your own local tasks.
+
+The preview canvas always has a 240×320 backing store; CSS only scales its
+appearance. The RGB565 preview toggle quantizes the same surface before upload.
+With it off, the browser shows RGB888 colors that can differ from the device.
+
+### Display and camera setup
+
+In **Settings**, enter the device's LAN address (for example
+`ws://192.168.1.123:81/`) or its device-specific `.local` hostname from serial
+output, then the private 32–128 character token. The example IP is not a
+discovered device. Save and click **Connect / Retry**. Use **Disconnect** to
+close the connection and cancel retries. Connections start only on your command.
+
+The backend opens the WebSocket with `arduino` and sends RGB565LE in 20 contiguous
+16-row strips. Only one frame is in flight; one latest render can replace the
+pending render. A fresh render is required after a reconnect. Multiple browser
+tabs share the host connection; one active renderer has a short renewable lease.
+Keep a dashboard tab visible to stream its canvas. Closing/minimizing all tabs
+can stop browser rendering; the UI reports stale or frozen display state.
+
+Open **Camera** and click **Open camera** for the independent camera feed.
+The backend attaches the Bearer token to `http://DEVICE:8080/stream`; the frontend
+receives only the same-origin stream. Only one camera viewer can be active.
+Closing the camera view, stopping it, or disconnecting cancels the upstream
+request. Another tab receives HTTP 409. The host never polls `/status`,
+`/capture`, or `/sensors` during the camera stream. HTTP 401 means invalid
+authorization; 503 means the camera is unavailable.
+
+Device WebSocket and camera HTTP traffic are unencrypted. Use trusted local Wi-Fi;
+do not expose the ESP32 or host publicly. The host binds to `127.0.0.1`, checks
+Host/Origin, restricts camera routing to the configured LAN device, and never
+returns stored tokens. The responsive layout works in narrow desktop windows;
+access from a separate phone is not enabled by the loopback-only default.
+
+### Integrations
+
+**Canvas LMS:** enter your school's HTTPS origin and personal access token in
+Settings. It imports the planner and refreshes about every 15 minutes. See
+[Canvas LMS details](docs/canvas-lms.md).
+
+**Notion:** share a task data source with your Notion connection and enter its
+data source UUID plus connection token. It reads the title property and optional
+`Due` (date), `Category` (select), and `Done` (checkbox) properties. A data source
+ID is distinct from a database ID. Refreshes occur about every 15 minutes, and
+failures retain the last good snapshot. See [Notion details](docs/notion.md).
+
+### Checks
+
+```powershell
+npm.cmd run check
+npm.cmd run build
+node --import tsx scripts/render-preview.ts
+```
+
+`check` runs TypeScript, 128 application tests, 10 preserved connector tests,
+and the real local TCP WebSocket loopback test. Coverage includes task CRUD and
+restart persistence, pet/timer state, deterministic opaque rendering, RGB565
+color bits, strip ordering, ACK pacing, reconnects, missing/stale sensors,
+camera authentication, fragmented multipart data, viewer cancellation, origin
+checks, and provider pagination/failure handling. The render command writes a
+hardware-free QA face image to ignored `artifacts/face-preview.png`.
+
+The production build and software tests have passed. Browser visual inspection
+was blocked by the computer-use URL access check, so responsive layout and
+interactive browser rendering still need a manual pass. Physical screen colors,
+orientation, camera video, Wi-Fi reliability, and live Canvas/Notion credentials
+have not been verified. ACKs confirm driver writes, not optical verification.
+Legacy CV tests could not run in this environment because OpenCV (`cv2`) is missing.
 
 ## Repository layout
 
 ```text
 src/                  Application, device, sensor, task, and storage code
+web/                  React dashboard and responsive styles
+src/render/face.ts     Canonical deterministic Canvas 2D renderer
+src/host/server.ts     Loopback API and frontend server
+src/camera/            Bounded MJPEG parser and single-viewer proxy
+src/notion/            Read-only Notion task provider
 scripts/              Configuration, simulator, link-check, and Canvas CLIs
 test/                 TypeScript unit and integration tests
 CV/                   Face/emotion recognition and hand-gesture interactions
@@ -63,6 +169,9 @@ docs/                 Integration documentation
 ```
 
 ## Computer vision
+
+This optional package is independent of the web dashboard and requires its
+Python ML dependencies. It is not needed for the ESP32 camera proxy.
 
 The [CV/](CV/) package provides:
 
@@ -81,7 +190,7 @@ The unit tests use synthetic landmarks and do not open a camera or download a
 model:
 
 ```powershell
-& .\.venv\Scripts\python.exe -m unittest discover -s .\CV -p "test_*.py" -v
+& .\.venv\Scripts\python.exe -m unittest discover -s .\CV -p "test_interactions.py" -v
 ```
 
 The bundled face detector can be smoke-tested against a synthetic frame:
@@ -154,9 +263,15 @@ psychological assessments.
 
 ## Configure the device
 
-Settings and device secrets are stored per user outside this repository:
+Settings, task data, companion/timer state, and device secrets are stored per user outside this repository:
 `%APPDATA%\TaskPet\settings.json` and `secrets.json` on Windows. Set
 `TASKPET_DATA_DIR` to use another local directory.
+
+The existing `TaskPet` directory name is retained so previous data remains
+available. `tasks.json` and `companion.json` contain non-secret state. Secret
+files are separate local JSON, not an encrypted OS vault; protect your user
+profile and backups. Unix permissions request a private directory/file; Windows
+uses the profile's inherited ACLs.
 
 ```powershell
 npm run configure -- address 192.168.1.123
@@ -185,8 +300,7 @@ hardware telemetry.
 
 ## Hardware link check
 
-After flashing the firmware described in
-[TaskPetLink/README.txt](TaskPetLink/README.txt):
+With the already-flashed device configured (no firmware changes required):
 
 ```powershell
 npm run link-check -- --seconds 30 --fps 5

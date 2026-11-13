@@ -40,6 +40,7 @@ export interface AppSettings {
 }
 
 export interface Secrets {
+  notionToken?: string | null;
   schemaVersion: typeof SECRETS_SCHEMA_VERSION;
   deviceToken: string | null;
   canvasPersonalToken: string | null;
@@ -118,6 +119,7 @@ function normalizeSecrets(raw: unknown): Secrets {
   const str = (value: unknown) => (typeof value === 'string' && value.length > 0 ? value : null);
   secrets.deviceToken = str(raw.deviceToken);
   secrets.canvasPersonalToken = str(raw.canvasPersonalToken);
+  secrets.notionToken = str(raw.notionToken);
   return secrets;
 }
 
@@ -141,6 +143,17 @@ export class AppStorage {
 
   saveTasksFile(value: unknown): void {
     this.writeJson(this.tasksPath, value, 0o644);
+  }
+
+  loadCompanion(): unknown { return this.readJson(join(this.dir, 'companion.json'), 1); }
+  saveCompanion(value: unknown): void { this.writeJson(join(this.dir, 'companion.json'), value, 0o644); }
+  loadNotionToken(): string | null { return this.loadSecrets().notionToken ?? null; }
+  saveNotionToken(token: string | null): void {
+    if (token !== null) {
+      const error = checkApiCredential(token, 'Notion token');
+      if (error) throw new Error(error);
+    }
+    this.updateSecrets(secrets => { secrets.notionToken = token; });
   }
 
   loadSettings(): AppSettings {

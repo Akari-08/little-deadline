@@ -105,8 +105,8 @@ test('corrupt settings are set aside and defaults used', () => {
   } finally { cleanup(); }
 });
 
-test('vendored connector files are identical to the supplied TaskPet Link package', () => {
-  const hash = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+test('vendored connector files match the supplied package across Git checkout line endings', () => {
+  const hash = (path: string) => createHash('sha256').update(readFileSync(path, 'utf8').replace(/\r\n/g, '\n')).digest('hex');
   for (const name of ['taskpet-link.mjs', 'taskpet-link.test.mjs', 'loopback-test.mjs', 'smoke-test.mjs']) {
     assert.equal(hash(join('device-link', name)), hash(join('TaskPetLink', 'client', name)), name);
   }

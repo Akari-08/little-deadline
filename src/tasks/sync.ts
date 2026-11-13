@@ -47,6 +47,7 @@ export class TaskSync extends Emitter<{ status: SyncStatus }> {
   private timer: unknown = null;
   private nextAt: number | null = null;
   private failures = 0;
+  private controller: AbortController | null = null;
 
   constructor(options: TaskSyncOptions) {
     super();
@@ -68,6 +69,7 @@ export class TaskSync extends Emitter<{ status: SyncStatus }> {
 
   stop(): void {
     this.running = false;
+    this.controller?.abort(new Error('Refresh stopped'));
     this.clearTimer();
     this.emitStatus();
   }
@@ -105,9 +107,11 @@ export class TaskSync extends Emitter<{ status: SyncStatus }> {
 
   private async run(): Promise<boolean> {
     const controller = new AbortController();
+    this.controller = controller;
     const timeout = this.scheduler.setTimeout(() => controller.abort(new Error('Refresh timed out')), this.timeoutMs);
     try {
       const snapshot = await this.provider.refresh(controller.signal);
+      if (controller.signal.aborted) return false;
       this.store.applySnapshot(snapshot);
       this.failures = 0;
       this.schedule(this.intervalMs());
@@ -122,6 +126,7 @@ export class TaskSync extends Emitter<{ status: SyncStatus }> {
       this.schedule(ceiling / 2 + this.random() * (ceiling / 2));
       return false;
     } finally {
+      if (this.controller === controller) this.controller = null;
       this.scheduler.clearTimeout(timeout);
     }
   }
