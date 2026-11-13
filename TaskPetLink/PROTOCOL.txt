@@ -1,0 +1,112 @@
+TASKPET LINK / 1
+
+Transport: WebSocket TCP port 81, root path /, subprotocol "arduino".
+Address: ws://DEVICE_IP:81/ (or device-specific .local hostname from serial log).
+All numeric JSON values are numbers, booleans are booleans, and absent/invalid
+sensor measurements are null. No NaN/Infinity JSON tokens are emitted.
+Use one connection for both video frames and sensor telemetry.
+
+CONNECT / AUTH
+Server sends:
+  {"type":"hello","protocol":"taskpet-link/1","auth_required":true}
+Client sends ONE complete text message within 5 seconds:
+  AUTH <device token>
+No angle brackets, quotes, newline or JSON wrapper in that message.
+Token is configured privately on both sides; never place it in the URL.
+Server replies after authentication:
+  {"type":"ready","protocol":"taskpet-link/1","width":240,"height":320,
+   "format":"rgb565le","max_strip_rows":16,"telemetry_hz":20,
+   "button_enabled":false}
+Wait for ready before sending pixels. Only one authenticated app is allowed.
+Other connections receive busy or auth_failed and close. No telemetry is sent
+before successful authentication. Standard WebSocket ping/pong is used for health.
+Client text PING optionally receives {"type":"pong"}.
+
+IMAGE FORMAT
+Width 240, height 320, origin top-left, X increases right, Y increases down.
+Row-major pixels, no padding. Each pixel is 16 bits: RRRRRGGGGGGBBBBB.
+Wire byte order is LITTLE ENDIAN (low byte first), regardless of your host type.
+Pack a source RGB888 pixel as:
+  value = ((R & 0xF8) << 8) | ((G & 0xFC) << 3) | (B >> 3)
+  byte0 = value & 255; byte1 = value >> 8
+Examples: red=00 F8, green=E0 07, blue=1F 00, white=FF FF, black=00 00.
+Frame size is 153600 bytes. RGBA alpha is not transmitted: composite it first.
+
+STRIP MESSAGE (BINARY)
+Send each strip as its OWN complete, unfragmented WebSocket binary message.
+TCP packet splitting is fine; WebSocket message fragmentation is unsupported.
+Header is exactly 12 bytes:
+  bytes 0..3   ASCII TPX1 (54 50 58 31 hex)
+  bytes 4..7   frame_id, unsigned 32-bit little-endian
+  bytes 8..9   y (first row), unsigned 16-bit little-endian
+  bytes 10..11 rows, unsigned 16-bit little-endian, range 1..16
+Remaining bytes: rows * 240 * 2 RGB565LE bytes.
+No additional trailer, CRC, compression, newline, or length prefix.
+WebSocket/TCP provide delivery ordering/integrity; application row validation
+guards incomplete/out-of-order frames. Transport errors must reconnect.
+
+A frame starts at y=0. Follow with contiguous rows, the same frame_id throughout,
+until exactly 320 rows are received. With 16-row strips send y=0,16,32,...,304.
+Normal size: 20 messages of 7692 bytes (12-byte header plus 7680 pixel bytes).
+The header must match the actual payload length and remain within screen bounds.
+Do not interleave frames, start another frame early, or send a full frame as a
+single 153600-byte message; the WebSocket library has a smaller message limit.
+Do not pause more than 2 seconds between strips. Wait for frame_ack before the
+next frame, and drop obsolete app frames rather than queueing them.
+Frame IDs may be any uint32; client SDK increments them and wraps modulo 2^32.
+
+FRAME ACKNOWLEDGEMENT
+After a complete frame has been copied to the TFT:
+  {"type":"frame_ack","frame_id":1,"frames":1,"draw_ms":65,"uptime_ms":12345}
+frame_id echoes your ID; frames counts completed uploads since device boot.
+draw_ms measures TFT transfer time only, not network or app rendering time.
+An ACK means the driver completed its write, not physical optical verification.
+No ACK is sent for a partial or invalid frame. Last displayed image is retained
+on incomplete input, client disconnect, and Wi-Fi loss (not on device reboot).
+
+SENSORS (SERVER TEXT JSON)
+Emitted nominally every 50 ms after authentication, including during streaming.
+Loop blocking may lower the effective rate. IMU nominal 20 Hz, environment 1 Hz.
+The same environment sample can appear in multiple telemetry messages.
+Example with both sensors present:
+  {"type":"sensors","seq":42,"uptime_ms":12345,
+   "imu":{"present":true,"valid":true,"sample_ms":12340,
+     "accel_m_s2":[0.1,-0.2,9.8],"gyro_rad_s":[0.0,0.01,0.0],
+     "temperature_c":28.0,"roll_deg":-1.17,"pitch_deg":-0.58},
+   "environment":{"kind":"BME280","valid":true,"sample_ms":12000,
+     "temperature_c":23.5,"pressure_hpa":954.2,"humidity_pct":44.1},
+   "button":{"enabled":false,"pressed":false,"press_count":0},
+   "display":{"frames":12,"last_frame_id":12},"rssi_dbm":-50}
+
+imu.present means initialization succeeded, not necessarily connected right now.
+Use imu.valid for current read validity. When invalid, all its measurement fields
+and sample_ms are null. Accelerometer range +/-4g, gyro range +/-500 deg/s;
+gyro values on the wire are radians/second, not degrees/second.
+MPU temperature is the chip temperature, distinct from environment temperature.
+roll/pitch are convenience gravity estimates; the app may compute its own fusion.
+Environment kind is BME280, BMP280, or none; invalid numeric fields/sample_ms are
+null. BMP280 humidity is always null. Pressure is local absolute hPa.
+sample_ms and uptime_ms use device uptime, not UTC; uint32 wraps about every
+49.7 days. Compute ages modulo 2^32. Use your app's monotonic receipt clock for
+connection health. seq, frames and press_count also wrap modulo 2^32.
+Button is disabled until wired/enabled in firmware. press_count increments on
+debounced presses so a short press remains observable between telemetry packets.
+last_frame_id is null until a full frame is displayed after boot.
+
+ERRORS (SERVER TEXT JSON)
+  {"type":"error","code":"bad_strip"}
+Codes: busy, auth_failed, auth_required, bad_header, bad_strip,
+frame_in_progress, strip_order, frame_timeout, unknown_command,
+fragmented_message_unsupported.
+Image errors reset staging without altering the already displayed image.
+Auth/busy/fragmentation failures close the connection. The JS SDK closes on any
+protocol error and rejects pending operations. A custom app should reconnect on
+errors, then send the newest complete frame rather than resume a partial one.
+WebSocket transport failures and oversized messages may close without JSON.
+
+APP EXPECTATIONS
+Your app owns pet state, render timing, task data, sensor interpretation, API
+tokens, reconnection UX and backend integrations. Render the exact same 240x320
+surface for preview and streaming. RGB565 quantization affects colors on device.
+Measure actual ACK latency; start at 5 fps. Do not assume a guaranteed frame rate
+or hard real-time telemetry. The bridge does not render HTML/CSS or run JS apps.

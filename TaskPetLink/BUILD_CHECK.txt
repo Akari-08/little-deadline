@@ -1,0 +1,46 @@
+TASKPET LINK VALIDATION — 2026-11-13
+
+FIRMWARE: PASS (compile + link)
+Arduino CLI 1.2.0; Espressif ESP32 core 3.3.3.
+FQBN: esp32:esp32:esp32wrover:FlashMode=dio,FlashFreq=40,PartitionScheme=default,UploadSpeed=115200
+WebSockets 2.7.2 and exact Adafruit dependencies listed in README.txt.
+Default wiring, button disabled, rotation 0. Empty example credentials used;
+no real network credentials or device token were added to the source/package.
+
+Compiler output:
+Sketch uses 1026623 bytes (78%) of program storage space.
+Maximum is 1310720 bytes.
+Global variables use 50576 bytes (15%) of dynamic memory,
+leaving 277104 bytes for local variables. Maximum is 327680 bytes.
+
+The compiler global-variable figure excludes dynamic allocations. The bridge
+allocates a 153600-byte framebuffer, preferring PSRAM and checking for failure.
+Wi-Fi/WebSocket buffers and JSON strings also use runtime memory.
+
+JAVASCRIPT CONNECTOR: PASS — Node.js 22.14.0, 10 tests
+- RGB primary-color golden bytes and little-endian encoding.
+- Strip headers, complete frame coverage, arbitrary binary bytes and short tail.
+- Invalid dimensions/lengths/header bounds rejected.
+- Authentication, sensor messages and matching frame acknowledgement.
+- Only one outstanding frame; unrelated ACK does not release it.
+- Disconnect rejects a pending frame and allows a fresh explicit connection.
+- Authentication failure and connection timeout close the link.
+- Missing frame ACK times out without accumulating a queue.
+- Invalid JSON/incompatible protocol and user-callback errors do not hang it.
+- Intentional disconnect reports status without a spurious error notification.
+
+REAL LOCAL WEBSOCKET TRANSPORT: PASS
+Native Node WebSocket connected to an independent protocol peer on 127.0.0.1.
+Authenticated, sent 40 binary strips covering two complete frames, verified the
+payload bytes, and received both ACKs and simultaneous telemetry over TCP.
+This is a host transport test, not an ESP32 emulator or physical Wi-Fi test.
+
+NOT PHYSICALLY VERIFIED
+No device was flashed. Actual Wi-Fi reachability/throughput, PSRAM allocation,
+TFT module/backlight behavior, sensor presence/accuracy and carrier-board wiring
+remain to be verified with the supplied smoke test and hardware checklist.
+Browser-specific mixed-content/local-network permissions were not exercised.
+No fixed FPS or hard real-time sensor rate is claimed.
+
+No precompiled binary or secrets.h is distributed. Fill local secrets.h and
+build/upload using your confirmed board configuration.
