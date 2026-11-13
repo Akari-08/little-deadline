@@ -50,6 +50,10 @@ class PresenceAndEmotion:
         if emotion is None:
             return events
         emotion = emotion.lower()
+        emotion = {
+            "anger": "angry",
+            "sadness": "sad",
+        }.get(emotion, emotion)
         if emotion == self._last_emotion:
             return events
         self._last_emotion = emotion

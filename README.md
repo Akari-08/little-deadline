@@ -107,15 +107,40 @@ webcam, and run:
 The first expression-model run may download model files. The smoke test is
 hardware-dependent and is not part of the default Node test command.
 
+### Interactive webcam validation
+
+For a live window that shows face expressions, hand landmarks, gesture names,
+and the last emitted event, download the MediaPipe Hand Landmarker model once:
+
+```powershell
+Invoke-WebRequest `
+  -Uri "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" `
+  -OutFile ".\CV\models\hand_landmarker.task"
+```
+
+Then run:
+
+```powershell
+Push-Location .\CV
+try {
+  & ..\.venv\Scripts\python.exe live_test.py
+} finally {
+  Pop-Location
+}
+```
+
+Hold one gesture at a time for about one second. Press **Q** to exit. The
+harness plays a distinct Windows tone for each event; volume gestures play
+higher or lower tones and do not change the operating-system volume.
+
 Gesture events are intentionally one-shot and cooldown-protected:
 
 | Gesture | Event |
 | --- | --- |
 | Fist | Toggle music |
-| Two fingers tilted right or left | Next or previous track |
-| Circular index-finger motion | Volume up or down |
+| Rotate open hand right or left | Next or previous track |
+| Circular index-finger motion | Smooth proportional volume control |
 | Open-hand movement | Greet |
-| Thumbs up or down | Positive or negative feedback |
 
 ### CV production notes
 

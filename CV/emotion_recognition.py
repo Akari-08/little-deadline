@@ -11,6 +11,11 @@ from transformers import (
 
 class EmotionRecognition:
     MODEL_NAME = "trpakov/vit-face-expression"
+    _EMOTION_ALIASES = {
+        "sadness": "sad",
+        "happiness": "happy",
+        "anger": "angry",
+    }
 
     def __init__(self):
         self.device = torch.device(
@@ -77,12 +82,12 @@ class EmotionRecognition:
                 dim=-1
             )[0]
 
-        scores = {
-            self.model.config.id2label[i].lower(): round(
-                probability.item(), 4
-            )
-            for i, probability in enumerate(probabilities)
-        }
+        scores: dict[str, float] = {}
+        for i, probability in enumerate(probabilities):
+            label = self.model.config.id2label[i].lower()
+            label = self._EMOTION_ALIASES.get(label, label)
+            score = round(probability.item(), 4)
+            scores[label] = max(score, scores.get(label, 0.0))
 
         expression = max(scores, key=scores.get)
 

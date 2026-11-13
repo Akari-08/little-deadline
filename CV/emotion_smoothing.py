@@ -5,8 +5,8 @@ from collections import deque
 class EmotionSmoother:
     def __init__(
         self,
-        window_size=10,
-        min_confidence=0.45,
+        window_size=5,
+        min_confidence=0.35,
         max_missing_frames=15,
     ):
         if window_size < 1:
