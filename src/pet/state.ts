@@ -1,16 +1,18 @@
 import type { TaskProviderId } from '../tasks/types.ts';
+import { isDisplaySlide, type DisplaySlide } from './slides.ts';
 
 export interface CompanionState {
   schemaVersion: 1;
   selectedId: string | null;
   provider: TaskProviderId;
+  displaySlide: DisplaySlide;
   pet: { xp: number; lastInteractionAt: number; celebrateUntil: number; lean: number };
   timer: { durationMs: number; remainingMs: number; startedAt: number | null; sessions: number };
   notion: { dataSourceId: string };
 }
 export function defaultCompanion(now = Date.now()): CompanionState {
   return {
-    schemaVersion: 1, selectedId: null, provider: 'mock',
+    schemaVersion: 1, selectedId: null, provider: 'mock', displaySlide: 'pet',
     pet: { xp: 0, lastInteractionAt: now, celebrateUntil: 0, lean: 0 },
     timer: { durationMs: 25 * 60_000, remainingMs: 25 * 60_000, startedAt: null, sessions: 0 },
     notion: { dataSourceId: '' },
@@ -22,6 +24,7 @@ export function normalizeCompanion(raw: unknown, now = Date.now()): CompanionSta
   const s = defaultCompanion(now);
   if (!obj(raw)) return s;
   s.provider = raw.provider === 'canvas' || raw.provider === 'notion' ? raw.provider : 'mock';
+  s.displaySlide = isDisplaySlide(raw.displaySlide) ? raw.displaySlide : 'pet';
   s.selectedId = typeof raw.selectedId === 'string' ? raw.selectedId.slice(0, 400) : null;
   if (obj(raw.pet)) {
     s.pet.xp = num(raw.pet.xp, 0);

@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import type { ViteDevServer } from 'vite';
 import { Application, InputError, validateLanAddress } from './application.ts';
+import { SpotifyError } from '../spotify/service.ts';
 
 async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -20,12 +21,20 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
     const port = (server.address() as { port: number }).port;
     const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
     if (!allowed.has(req.headers.host ?? '')) { json(res, 403, { error: 'Local clients only.' }); return; }
-    if ((req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) || req.headers['sec-fetch-site'] === 'cross-site') { json(res, 403, { error: 'Origin not permitted.' }); return; }
+    const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+    // Spotify redirects the browser from accounts.spotify.com. That navigation is
+    // cross-site by design; the callback validates the one-time OAuth state.
+    const spotifyCallback = req.method === 'GET' && url.pathname === '/api/spotify/callback';
+    if (!spotifyCallback && ((req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) || req.headers['sec-fetch-site'] === 'cross-site')) { json(res, 403, { error: 'Origin not permitted.' }); return; }
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
     if (url.pathname.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
+      if (spotifyCallback) {
+        try { await app.spotify.callback(url.searchParams, `http://${req.headers.host}`); res.writeHead(303, { Location: '/?spotify=connected', 'Referrer-Policy': 'no-referrer' }).end(); }
+        catch { res.writeHead(303, { Location: '/?spotify=error', 'Referrer-Policy': 'no-referrer' }).end(); }
+        return;
+      }
       if (req.method === 'GET' && url.pathname === '/api/state') { json(res, 200, app.snapshot()); return; }
       if (req.method === 'GET' && url.pathname === '/api/camera/stream') {
         try { await validateLanAddress(app.storage.loadSettings().device.address); }
@@ -34,6 +43,7 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
       }
       if (req.method !== 'POST' || req.headers['x-lil-deadline'] !== '1') { json(res, 403, { error: 'Expected a local app request.' }); return; }
       try {
+        if (url.pathname === '/api/spotify/authorize') { json(res, 200, { url: app.spotify.authorizeUrl(`http://${req.headers.host}`) }); return; }
         if (url.pathname === '/api/frame') {
           if (uploading) { json(res, 429, { error: 'A frame is already arriving.' }); return; }
           if (req.headers['content-type'] !== 'application/octet-stream') throw new InputError('Expected binary pixels.');
@@ -49,7 +59,7 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new InputError('Expected an object.');
         await app.action(url.pathname, body as Record<string, unknown>);
         json(res, 200, app.snapshot());
-      } catch (error) { json(res, error instanceof InputError ? 400 : 500, { error: error instanceof InputError ? error.message : 'Could not save this change. Check the local data directory and retry.' }); }
+      } catch (error) { json(res, error instanceof InputError || error instanceof SpotifyError ? 400 : 500, { error: error instanceof InputError || error instanceof SpotifyError ? error.message : 'Could not save this change. Check the local data directory and retry.' }); }
       return;
     }
     if (options.dev) { options.dev.middlewares(req, res); return; }

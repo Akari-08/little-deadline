@@ -250,6 +250,10 @@ class GestureInterpreter:
             event = self._emit("music_next", now)
         elif self._stable_gesture == "rotate_left" and stable_changed:
             event = self._emit("music_previous", now)
+        elif self._stable_gesture == "two_fingers_right" and stable_changed:
+            event = self._emit("slide_next", now)
+        elif self._stable_gesture == "two_fingers_left" and stable_changed:
+            event = self._emit("slide_previous", now)
         elif self._stable_gesture == "open_hand":
             event = self._detect_wave(now)
         else:

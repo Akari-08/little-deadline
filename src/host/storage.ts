@@ -7,7 +7,7 @@
  * and replaced with defaults; a corrupt secrets file is deleted (no stray credential copies).
  *
  * Secrets held here (host process only — never sent to UI code, the ESP32, logs or URLs):
- * the ESP32 device token and the user's Canvas LMS personal access token.
+ * the ESP32 device token, Canvas LMS and Notion tokens, and Spotify OAuth tokens.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -37,10 +37,14 @@ export interface AppSettings {
     /** Background refresh period. */
     refreshMinutes: number;
   };
+  spotify: { clientId: string };
 }
 
 export interface Secrets {
   notionToken?: string | null;
+  spotifyAccessToken?: string | null;
+  spotifyRefreshToken?: string | null;
+  spotifyExpiresAt?: number | null;
   schemaVersion: typeof SECRETS_SCHEMA_VERSION;
   deviceToken: string | null;
   canvasPersonalToken: string | null;
@@ -57,6 +61,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   device: { address: '', autoConnect: false },
   streaming: { targetFps: DEFAULT_TARGET_FPS },
   canvas: { baseUrl: '', lookbackDays: 7, lookaheadDays: 21, refreshMinutes: 15 },
+  spotify: { clientId: '' },
 };
 
 const EMPTY_SECRETS: Secrets = {
@@ -110,6 +115,9 @@ export function normalizeSettings(raw: unknown): AppSettings {
     settings.canvas.lookaheadDays = clampInt(c.lookaheadDays, 1, 120, d.lookaheadDays);
     settings.canvas.refreshMinutes = clampInt(c.refreshMinutes, 5, 240, d.refreshMinutes);
   }
+  if (isObj(raw.spotify) && typeof raw.spotify.clientId === 'string' && /^[a-f\d]{32}$/i.test(raw.spotify.clientId)) {
+    settings.spotify.clientId = raw.spotify.clientId;
+  }
   return settings;
 }
 
@@ -120,6 +128,9 @@ function normalizeSecrets(raw: unknown): Secrets {
   secrets.deviceToken = str(raw.deviceToken);
   secrets.canvasPersonalToken = str(raw.canvasPersonalToken);
   secrets.notionToken = str(raw.notionToken);
+  secrets.spotifyAccessToken = str(raw.spotifyAccessToken);
+  secrets.spotifyRefreshToken = str(raw.spotifyRefreshToken);
+  secrets.spotifyExpiresAt = typeof raw.spotifyExpiresAt === 'number' && Number.isFinite(raw.spotifyExpiresAt) ? raw.spotifyExpiresAt : null;
   return secrets;
 }
 
@@ -148,6 +159,18 @@ export class AppStorage {
   loadCompanion(): unknown { return this.readJson(join(this.dir, 'companion.json'), 1); }
   saveCompanion(value: unknown): void { this.writeJson(join(this.dir, 'companion.json'), value, 0o644); }
   loadNotionToken(): string | null { return this.loadSecrets().notionToken ?? null; }
+  loadSpotifyTokens(): { accessToken: string; refreshToken: string; expiresAt: number } | null {
+    const s = this.loadSecrets();
+    return s.spotifyAccessToken && s.spotifyRefreshToken && s.spotifyExpiresAt
+      ? { accessToken: s.spotifyAccessToken, refreshToken: s.spotifyRefreshToken, expiresAt: s.spotifyExpiresAt } : null;
+  }
+  saveSpotifyTokens(value: { accessToken: string; refreshToken: string; expiresAt: number } | null): void {
+    this.updateSecrets(s => {
+      s.spotifyAccessToken = value?.accessToken ?? null;
+      s.spotifyRefreshToken = value?.refreshToken ?? null;
+      s.spotifyExpiresAt = value?.expiresAt ?? null;
+    });
+  }
   saveNotionToken(token: string | null): void {
     if (token !== null) {
       const error = checkApiCredential(token, 'Notion token');

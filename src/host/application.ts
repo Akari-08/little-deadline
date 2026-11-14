@@ -12,6 +12,9 @@ import { CameraProxy } from '../camera/proxy.ts';
 import { normalizeCompanion, celebrate, settleTimer, timerAction } from '../pet/state.ts';
 import { parseDeviceAddress } from '../device/address.ts';
 import { checkDeviceToken } from '../device/token.ts';
+import { SpotifyService, type SpotifyAction } from '../spotify/service.ts';
+import { CvMusicBridge } from '../cv/music-bridge.ts';
+import { isDisplaySlide, moveDisplaySlide } from '../pet/slides.ts';
 import type { RenderedFrame } from '../device/streamer.ts';
 
 export class InputError extends Error {}
@@ -36,6 +39,8 @@ export class Application {
   readonly tasks: TaskStore;
   readonly device: DeviceService;
   readonly camera: CameraProxy;
+  readonly spotify: SpotifyService;
+  readonly cvMusic: CvMusicBridge;
   readonly companion;
   readonly canvasSync: TaskSync;
   readonly notionSync: TaskSync;
@@ -45,6 +50,7 @@ export class Application {
   private seq = 0;
   private owner: string | null = null;
   private tick: ReturnType<typeof setInterval>;
+  private spotifyTick: ReturnType<typeof setInterval>;
   constructor(storage = new AppStorage()) {
     this.storage = storage;
     this.companion = normalizeCompanion(storage.loadCompanion());
@@ -53,6 +59,10 @@ export class Application {
     this.device = new DeviceService({ source: { latest: () => performance.now() - this.frameAt < 1500 ? this.frame : null }, targetFps: 5 });
     this.device.supervisor.on('sessionEnded', () => { this.frame = null; });
     this.camera = new CameraProxy();
+    this.spotify = new SpotifyService(storage);
+    this.cvMusic = new CvMusicBridge(this.spotify,
+      () => { this.companion.pet.lastInteractionAt = Date.now(); this.companion.pet.celebrateUntil = Date.now() + 2000; this.save(); },
+      direction => { this.companion.displaySlide = moveDisplaySlide(this.companion.displaySlide, direction); this.save(); });
     const settings = storage.loadSettings();
     this.device.configure({ address: settings.device.address, token: storage.loadDeviceToken() });
     this.canvasSync = new TaskSync({ store: this.tasks, intervalMs: () => storage.loadSettings().canvas.refreshMinutes * 60_000,
@@ -61,6 +71,7 @@ export class Application {
       provider: new NotionTaskProvider(() => ({ token: storage.loadNotionToken(), dataSourceId: this.companion.notion.dataSourceId })) });
     this.canvasSync.start(); this.notionSync.start();
     this.tick = setInterval(() => { if (settleTimer(this.companion, Date.now())) this.save(); }, 500);
+    this.spotifyTick = setInterval(() => { if (this.spotify.status().connected) void this.spotify.refreshPlayback(); }, 10_000);
     this.save();
   }
   save(): void { this.storage.saveCompanion(this.companion); }
@@ -70,6 +81,7 @@ export class Application {
       progress: this.tasks.progress(this.companion.provider), settings,
       secrets: { ...this.storage.describeSecrets(), notionTokenSet: !!this.storage.loadNotionToken() },
       diagnostics, camera: this.camera.status(), providers: { canvas: this.canvasSync.status(), notion: this.notionSync.status() },
+      spotify: this.spotify.status(), cvMusic: this.cvMusic.status(),
       render: { fresh: this.frame !== null && performance.now() - this.frameAt < 1500, owner: this.owner },
     };
   }
@@ -104,6 +116,10 @@ export class Application {
       s.pet.lastInteractionAt = Date.now();
       s.pet.celebrateUntil = Date.now() + 2000;
       s.pet.lean = body.direction === 'left' ? -1 : body.direction === 'right' ? 1 : 0;
+    } else if (path === '/api/display/slide') {
+      if (isDisplaySlide(body.slide)) s.displaySlide = body.slide;
+      else if (body.direction === 'next' || body.direction === 'previous') s.displaySlide = moveDisplaySlide(s.displaySlide, body.direction);
+      else throw new InputError('Choose a display slide or direction.');
     } else if (path === '/api/timer') {
       if (!['start', 'pause', 'reset'].includes(string(body.action))) throw new InputError('Unknown timer action.');
       timerAction(s, body.action as 'start' | 'pause' | 'reset', Date.now());
@@ -123,11 +139,16 @@ export class Application {
     } else if (path === '/api/device/disconnect') { this.device.disconnect(); this.camera.stop(); this.frame = null; }
     else if (path === '/api/settings/canvas') {
       if (this.canvasSync.status().refreshing) throw new InputError('Wait for the current Canvas refresh before changing settings.');
-      const url = string(body.baseUrl).trim(), parsed = url ? parseCanvasBaseUrl(url) : null;
+      const previous = this.storage.loadSettings().canvas.baseUrl;
+      const url = typeof body.baseUrl === 'string' ? body.baseUrl.trim() : previous;
+      const parsed = url ? parseCanvasBaseUrl(url) : null;
       if (parsed && !parsed.ok) throw new InputError(parsed.error);
       const token = string(body.token);
+      if (token && !parsed) throw new InputError("Set your school's Canvas address once before saving an API token.");
+      if (parsed?.ok && previous && parsed.origin !== previous && !token) throw new InputError('Enter a new Canvas API token when changing schools.');
       if (token) { const error = checkApiCredential(token, 'Canvas token'); if (error) throw new InputError(error); this.storage.saveCanvasPersonalToken(token); }
       if (body.clearToken === true) this.storage.saveCanvasPersonalToken(null);
+      if (!parsed && previous) this.storage.saveCanvasPersonalToken(null);
       this.storage.updateSettings(settings => { settings.canvas.baseUrl = parsed?.ok ? parsed.origin : ''; });
       this.canvasSync.start();
     } else if (path === '/api/settings/notion') {
@@ -137,11 +158,23 @@ export class Application {
       if (token) { const error = checkApiCredential(token, 'Notion token'); if (error) throw new InputError(error); this.storage.saveNotionToken(token); }
       if (body.clearToken === true) this.storage.saveNotionToken(null);
       s.notion.dataSourceId = id; this.notionSync.start();
-    } else if (path === '/api/sync/canvas') await this.canvasSync.refreshNow();
+    } else if (path === '/api/settings/spotify') {
+      this.cvMusic.stop();
+      try { this.spotify.configure(string(body.clientId).trim()); }
+      catch (error) { throw new InputError(error instanceof Error ? error.message : 'Invalid Spotify Client ID.'); }
+    } else if (path === '/api/spotify/disconnect') {
+      this.cvMusic.stop(); this.spotify.disconnect();
+    } else if (path === '/api/spotify/control') {
+      try { await this.spotify.control(string(body.command) as SpotifyAction, typeof body.value === 'number' ? body.value : undefined); }
+      catch (error) { throw new InputError(error instanceof Error ? error.message : 'Spotify control failed.'); }
+    } else if (path === '/api/cv/start') {
+      try { this.cvMusic.start(); } catch (error) { throw new InputError(error instanceof Error ? error.message : 'Could not start music gestures.'); }
+    } else if (path === '/api/cv/stop') this.cvMusic.stop();
+    else if (path === '/api/sync/canvas') await this.canvasSync.refreshNow();
     else if (path === '/api/sync/notion') await this.notionSync.refreshNow();
     else throw new InputError('Unknown action.');
     this.save();
   }
-  async dispose(): Promise<void> { clearInterval(this.tick); this.camera.stop(); this.canvasSync.stop(); this.notionSync.stop(); await this.device.dispose(); }
+  async dispose(): Promise<void> { clearInterval(this.tick); clearInterval(this.spotifyTick); this.cvMusic.stop(); this.camera.stop(); this.canvasSync.stop(); this.notionSync.stop(); await this.device.dispose(); }
 }
 export type AppSnapshot = ReturnType<Application['snapshot']>;

@@ -4,6 +4,20 @@ import { defaultCompanion, normalizeCompanion, mood, timerAction, remainingTime,
 import { createCanvas } from '@napi-rs/canvas';
 import { renderFace, quantizeSurface, FACE_WIDTH, FACE_HEIGHT } from '../src/render/face.ts';
 import { rgbaToRGB565LE } from '../src/device/link.ts';
+import { DISPLAY_SLIDES, moveDisplaySlide } from '../src/pet/slides.ts';
+
+test('display slides wrap and survive companion persistence', () => {
+  const s = defaultCompanion(1000);
+  assert.equal(s.displaySlide, 'pet');
+  for (const expected of DISPLAY_SLIDES.slice(1)) {
+    s.displaySlide = moveDisplaySlide(s.displaySlide, 'next');
+    assert.equal(s.displaySlide, expected);
+  }
+  assert.equal(moveDisplaySlide(s.displaySlide, 'next'), 'pet');
+  assert.equal(moveDisplaySlide('pet', 'previous'), 'sensors');
+  assert.equal(normalizeCompanion(JSON.parse(JSON.stringify(s)), 2000).displaySlide, 'sensors');
+  assert.equal(normalizeCompanion({ displaySlide: 'invalid' }, 2000).displaySlide, 'pet');
+});
 
 test('focus timer pauses, resumes, persists, completes once and resets', () => {
   const s = defaultCompanion(1000);
@@ -47,4 +61,22 @@ test('canonical face is deterministic, opaque, 240×320 and RGB565-idempotent', 
   quantizeSurface(ctx); assert.ok(Buffer.from(rgbaToRGB565LE(pixels())).equals(Buffer.from(packed)), 'quantized preview has exactly the device color bits');
   renderFace(ctx, s, 41000); assert.ok(!pixels().equals(first), 'animation changes with explicit time');
   s.companion.pet.celebrateUntil = 50000; renderFace(ctx, s, 41000); assert.ok(!pixels().equals(first));
+});
+
+test('each display slide uses the same opaque 240×320 surface and distinct pixels', () => {
+  const canvas = createCanvas(FACE_WIDTH, FACE_HEIGHT);
+  const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D;
+  const s = { companion: defaultCompanion(1000), task: 'Finish the essay', done: 2, total: 4, status: 'PREVIEW MODE',
+    tasks: [{ title: 'Finish the essay', done: false }], music: { connected: false, playback: 'unknown', track: null, artist: null, volume: null },
+    sensors: { source: 'unavailable', imu: 'unavailable', environment: 'unavailable', temperatureC: null, humidityPct: null, rssiDbm: null } };
+  const images = new Set<string>();
+  for (const slide of DISPLAY_SLIDES) {
+    s.companion.displaySlide = slide;
+    renderFace(ctx, s, 40000);
+    const pixels = Buffer.from(ctx.getImageData(0, 0, FACE_WIDTH, FACE_HEIGHT).data);
+    assert.ok(pixels.every((value, i) => i % 4 !== 3 || value === 255), `${slide} is opaque`);
+    images.add(pixels.toString('base64'));
+  }
+  assert.equal(images.size, DISPLAY_SLIDES.length);
+  assert.equal(canvas.width, 240); assert.equal(canvas.height, 320);
 });

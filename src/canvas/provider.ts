@@ -141,7 +141,7 @@ export class CanvasTaskProvider implements TaskProvider {
   private config(): Config {
     const settings = this.options.loadSettings();
     if (!settings.baseUrl) {
-      return { ok: false, reason: 'address', message: "Canvas LMS is not set up: add your school's Canvas address (npm run configure -- canvas-url https://<school>.instructure.com)." };
+      return { ok: false, reason: 'address', message: "Add your school's Canvas website address once in Settings, then save your API token." };
     }
     const parsed = parseCanvasBaseUrl(settings.baseUrl);
     if (!parsed.ok) return { ok: false, reason: 'address', message: `The saved Canvas address is not usable: ${parsed.error}` };
@@ -150,7 +150,7 @@ export class CanvasTaskProvider implements TaskProvider {
       return {
         ok: false,
         reason: 'credentials',
-        message: 'Canvas LMS has no access token: create one in Canvas (Account > Settings > Approved Integrations) and save it with: npm run configure -- canvas-token',
+        message: 'Add your personal Canvas API token in Settings to import coursework.',
       };
     }
     return { ok: true, origin: parsed.origin, auth, settings };

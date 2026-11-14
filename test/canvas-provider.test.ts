@@ -151,8 +151,8 @@ test('helpers: timestamps, kinds and URLs', () => {
 test('unconfigured until a valid address and credentials exist; no requests are made', async () => {
   const empty = await setup({ baseUrl: '' });
   assert.equal(empty.provider.status().health, 'unconfigured');
-  assert.match(empty.provider.status().message ?? '', /canvas-url/);
-  await assert.rejects(empty.provider.refresh(), /not set up/);
+  assert.match(empty.provider.status().message ?? '', /Canvas website address/);
+  await assert.rejects(empty.provider.refresh(), /Canvas website address/);
 
   const insecure = await setup({ baseUrl: 'http://canvas.example.edu' });
   assert.equal(insecure.provider.status().health, 'unconfigured');
@@ -163,7 +163,7 @@ test('unconfigured until a valid address and credentials exist; no requests are 
   assert.equal(status.health, 'unconfigured');
   assert.equal(status.provider, 'canvas');
   assert.equal(status.label, 'Canvas LMS');
-  assert.match(status.message ?? '', /canvas-token/);
+  assert.match(status.message ?? '', /API token/);
   await assert.rejects(noToken.provider.refresh(), ProviderAuthError);
   for (const ctx of [empty, insecure, noToken]) assert.equal(ctx.mock.requests.length, 0);
 });

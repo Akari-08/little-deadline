@@ -247,7 +247,7 @@ export class CanvasClient {
 
   private authFailureMessage(): string {
     return this.auth.kind === 'personal-token'
-      ? 'Canvas rejected the access token (it may have expired or been revoked). Create a new access token in Canvas (Account > Settings > Approved Integrations > New Access Token) and save it with: npm run configure -- canvas-token'
+      ? 'Canvas rejected the access token (it may have expired or been revoked). Create a new one in Canvas (Account > Settings > Approved Integrations > New Access Token) and enter it in Lil Deadline Settings.'
       : 'Your Canvas sign-in has expired or was revoked. Please sign in to Canvas again.';
   }
 

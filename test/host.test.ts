@@ -10,6 +10,7 @@ import { Application, validateLanAddress } from '../src/host/application.ts';
 import { AppStorage } from '../src/host/storage.ts';
 import { createAppServer } from '../src/host/server.ts';
 import { SimulatedDevice } from '../src/simulator/simulated-device.ts';
+import { startMockCanvas, FAKE_CANVAS_TOKEN } from './helpers/mock-canvas-server.ts';
 
 async function harness() {
   const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-host-')), storage = new AppStorage(dir), app = new Application(storage);
@@ -24,6 +25,70 @@ async function waitFor(predicate: () => boolean, timeout = 5000) {
   const deadline = Date.now() + timeout;
   while (!predicate()) { if (Date.now() > deadline) throw new Error('Expected state did not arrive'); await new Promise(r => setTimeout(r, 20)); }
 }
+
+test('Spotify routes expose only the authorization URL and reject an unmatched callback', async () => {
+  const h = await harness();
+  try {
+    assert.equal((await h.post('/api/spotify/authorize', {})).status, 400);
+    assert.equal((await h.post('/api/settings/spotify', { clientId: 'a'.repeat(32) })).status, 200);
+    const authorization = await (await h.post('/api/spotify/authorize', {})).json() as { url: string };
+    const url = new URL(authorization.url);
+    assert.equal(url.searchParams.get('redirect_uri'), h.url + '/api/spotify/callback');
+    assert.ok(url.searchParams.get('code_challenge'));
+    const callback = await fetch(h.url + '/api/spotify/callback?code=forged&state=forged', { redirect: 'manual',
+      headers: { Origin: 'https://accounts.spotify.com', 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' } });
+    assert.equal(callback.status, 303);
+    assert.equal(callback.headers.get('location'), '/?spotify=error');
+    const snapshot = await (await fetch(h.url + '/api/state')).text();
+    assert.ok(!snapshot.includes('code_verifier'));
+    assert.ok(!snapshot.includes('forged'));
+    assert.equal((await h.post('/api/display/slide', { direction: 'next' })).status, 200);
+    assert.equal(h.app.companion.displaySlide, 'tasks');
+    assert.equal((await h.post('/api/display/slide', { slide: 'sensors' })).status, 200);
+    assert.equal(h.app.companion.displaySlide, 'sensors');
+    assert.equal((await h.post('/api/display/slide', { slide: 'invalid' })).status, 400);
+    assert.equal(h.app.companion.displaySlide, 'sensors');
+  } finally { await h.close(); }
+});
+
+test('cross-site Spotify callback navigation is accepted while other API routes stay local', async () => {
+  const h = await harness();
+  try {
+    h.app.spotify.callback = async (params, origin) => {
+      assert.equal(params.get('code'), 'test-code');
+      assert.equal(origin, h.url);
+    };
+    const headers = { Origin: 'https://accounts.spotify.com', 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' };
+    const callback = await fetch(h.url + '/api/spotify/callback?code=test-code&state=test-state', { headers, redirect: 'manual' });
+    assert.equal(callback.status, 303);
+    assert.equal(callback.headers.get('location'), '/?spotify=connected');
+    assert.equal((await fetch(h.url + '/api/state', { headers })).status, 403);
+    assert.equal((await fetch(h.url + '/api/spotify/authorize', { method: 'POST', headers: { ...headers, 'X-Lil-Deadline': '1' } })).status, 403);
+  } finally { await h.close(); }
+});
+
+test('Canvas accepts token-only updates after the school address is saved once', async () => {
+  const h = await harness();
+  const mock = await startMockCanvas({ handler: () => ({ body: [] }) });
+  try {
+    assert.equal((await h.post('/api/settings/canvas', { token: FAKE_CANVAS_TOKEN })).status, 400);
+    assert.equal(h.storage.loadCanvasPersonalToken(), null);
+    assert.equal((await h.post('/api/settings/canvas', { baseUrl: mock.origin })).status, 200);
+    const saved = await h.post('/api/settings/canvas', { token: FAKE_CANVAS_TOKEN });
+    assert.equal(saved.status, 200);
+    assert.ok(!(await saved.text()).includes(FAKE_CANVAS_TOKEN), 'API response must not expose the token');
+    assert.equal(h.storage.loadSettings().canvas.baseUrl, mock.origin);
+    assert.equal(h.storage.loadCanvasPersonalToken(), FAKE_CANVAS_TOKEN);
+    await waitFor(() => h.app.canvasSync.status().snapshot !== null);
+    assert.ok(mock.requests.some(r => r.path === '/api/v1/planner/items'));
+    assert.deepEqual(mock.violations, []);
+    assert.equal((await h.post('/api/settings/canvas', { baseUrl: 'https://other.example.edu' })).status, 400);
+    assert.equal(h.storage.loadSettings().canvas.baseUrl, mock.origin);
+    assert.equal((await h.post('/api/settings/canvas', { clearToken: true })).status, 200);
+    assert.equal(h.storage.loadCanvasPersonalToken(), null);
+    assert.equal(h.storage.loadSettings().canvas.baseUrl, mock.origin);
+  } finally { await h.close(); await mock.close(); }
+});
 
 test('HTTP task CRUD, priority, pet rewards and timer changes survive restart', async () => {
   const h = await harness();

@@ -7,6 +7,15 @@ on 2026-11-13; re-verify before implementing. Instructure is moving its docs fro
 
 ## Design
 
+In Lil Deadline, Canvas setup uses a **personal access token** (often called
+an API key) as its only credential. Canvas API calls also need the institution's
+HTTPS domain. Enter the school Canvas website address once in Settings; after
+that, replacing a token requires only the token field. The address is preserved
+when a token is replaced or cleared. The app cannot derive an institution
+domain from the token itself. A Canvas OAuth developer key/client ID cannot be
+used as a personal access token. Changing schools requires a token for the new
+school, so an existing token is never sent to a different Canvas host.
+
 - **Auth: per-user personal access tokens.** Each user creates a token in Canvas and enters
   it into their own local copy of TaskPet. A school-issued OAuth developer key is not
   available, so "Sign in with Canvas" (OAuth2 + PKCE) is parked in git history at `f64a89c`

@@ -13,6 +13,7 @@ are expected. Mouse and keyboard controls drive pet interaction.
 ## Project status
 
 - Responsive dashboard, animated pet, progress ring, selected task, and focus timer.
+- Five mirrored display slides: Sprout, Tasks, Focus, Music, and Sensors.
 - Persistent local task add/edit/complete/reopen/delete, categories, due dates,
   priorities, filters, and a clearly labelled Mock demo starter set.
 - Host-owned device connection, ACK-paced 5 fps stream, bounded retries, and
@@ -20,8 +21,10 @@ are expected. Mouse and keyboard controls drive pet interaction.
 - Backend camera proxy for the supplied authenticated 320×240 MJPEG stream.
 - Canvas LMS and Notion read-only task imports with backend-only credentials,
   pagination, timeouts, rate-limit handling, and persisted last-good snapshots.
-- Separate legacy Python CV package retained in `CV/`; it is not connected to
-  this dashboard. Camera viewing does not record video or recognize faces.
+- Optional Spotify playback card with host-side PKCE account linking, track,
+  play/pause, skip, and volume controls.
+- Optional computer-webcam hand gestures from `CV/` change slides, control
+  Spotify, and greet Sprout. Camera viewing does not record video or recognize faces.
 
 Checking a task locally never submits Canvas coursework, changes grades, or
 writes to Notion. Both real integrations remain unconfigured until you add
@@ -33,7 +36,8 @@ your credentials in Settings.
 - npm
 - An ESP32 running the supplied bridge firmware for hardware use
 
-Python and CV dependencies are optional, only for the separate `CV/` tools.
+Python and CV dependencies are optional, for hand-gesture music control and the
+separate `CV/` tools. Spotify is optional and needs Internet access.
 
 Hardware is not required for development or automated tests.
 
@@ -82,6 +86,8 @@ Settings fields, not in `.env`, command arguments, or public build variables.
    typing or editing a task.
 5. Choose **Mock / local**, **Canvas LMS**, or **Notion** below the task list.
    The Mock starter set is demo data; it can be replaced with your own local tasks.
+6. Use the arrows below the device preview, **[ / ]**, or **Page Up / Page Down**
+   to move between its five slides. The selected slide is saved across restarts.
 
 The preview canvas always has a 240×320 backing store; CSS only scales its
 appearance. The RGB565 preview toggle quantizes the same surface before upload.
@@ -118,8 +124,46 @@ access from a separate phone is not enabled by the loopback-only default.
 
 ### Integrations
 
-**Canvas LMS:** enter your school's HTTPS origin and personal access token in
-Settings. It imports the planner and refreshes about every 15 minutes. See
+**Spotify music:** Create an app in the Spotify Developer Dashboard and add this
+exact Redirect URI (when using the default port):
+
+```text
+http://127.0.0.1:3210/api/spotify/callback
+```
+
+If you change `LIL_DEADLINE_PORT`, use that port in the registered URI. Open Lil
+Deadline at `http://127.0.0.1:3210`, enter the **Client ID** in Settings, save it,
+then click **Link Spotify account**. You do not need to give the app a client
+secret or paste credentials into a chat. Sign-in uses PKCE; tokens are kept in
+the host's private local secret file. Spotify Premium and an active playback
+device are needed for player controls. In Spotify's development mode, the app
+owner must also have Premium and any other test user must be allowed in the app
+settings. The ESP32 does not receive Spotify credentials or audio. Playback
+occurs in a Spotify app or device, not in the 240×320 preview. See
+[Spotify setup](docs/spotify.md) for details.
+
+**CV display and music gestures:** Click **Start gestures** on the music card.
+This uses the **computer webcam**, independently of the ESP32 camera viewer.
+Point two fingers horizontally right or left to move through display slides.
+Fist toggles Spotify playback, rotated open hand skips tracks, a
+pointing-finger circle changes volume, and a wave greets Sprout. Display
+navigation and greeting work without Spotify; music gestures need a linked
+account. Click **Stop gestures** to release the webcam. To install the optional
+Python dependencies on Windows:
+
+```powershell
+py -3 -m pip install opencv-python mediapipe
+```
+
+The bundled `CV/models/hand_landmarker.task` must also be present. If your
+Python executable is not `py -3`, set `LIL_DEADLINE_PYTHON` to its path before
+starting the Node host. The app sends only gesture event names from Python to
+Node; no webcam frames are uploaded. Music buttons work without CV.
+
+**Canvas LMS:** enter your school's Canvas website address once, then paste a
+personal API access token in Settings. Future token replacements need only the
+token; the school address stays saved. Canvas cannot determine the school from
+an opaque token alone. The app imports the planner about every 15 minutes. See
 [Canvas LMS details](docs/canvas-lms.md).
 
 **Notion:** share a task data source with your Notion connection and enter its
@@ -136,7 +180,7 @@ npm.cmd run build
 node --import tsx scripts/render-preview.ts
 ```
 
-`check` runs TypeScript, 128 application tests, 10 preserved connector tests,
+`check` runs TypeScript, 137 application tests, 10 preserved connector tests,
 and the real local TCP WebSocket loopback test. Coverage includes task CRUD and
 restart persistence, pet/timer state, deterministic opaque rendering, RGB565
 color bits, strip ordering, ACK pacing, reconnects, missing/stale sensors,
@@ -149,7 +193,9 @@ was blocked by the computer-use URL access check, so responsive layout and
 interactive browser rendering still need a manual pass. Physical screen colors,
 orientation, camera video, Wi-Fi reliability, and live Canvas/Notion credentials
 have not been verified. ACKs confirm driver writes, not optical verification.
-Legacy CV tests could not run in this environment because OpenCV (`cv2`) is missing.
+Spotify authorization, live playback, and webcam gestures require your account
+and hardware and have not been verified here. Legacy CV tests could not run in
+this environment because OpenCV (`cv2`) is missing.
 
 ## Repository layout
 
@@ -160,6 +206,8 @@ src/render/face.ts     Canonical deterministic Canvas 2D renderer
 src/host/server.ts     Loopback API and frontend server
 src/camera/            Bounded MJPEG parser and single-viewer proxy
 src/notion/            Read-only Notion task provider
+src/spotify/           Host-side Spotify PKCE and playback service
+src/cv/                Bounded Python gesture bridge
 scripts/              Configuration, simulator, link-check, and Canvas CLIs
 test/                 TypeScript unit and integration tests
 CV/                   Face/emotion recognition and hand-gesture interactions
@@ -170,8 +218,9 @@ docs/                 Integration documentation
 
 ## Computer vision
 
-This optional package is independent of the web dashboard and requires its
-Python ML dependencies. It is not needed for the ESP32 camera proxy.
+The optional hand-gesture portion is connected to the Spotify music card. Other
+CV experiments remain separate from the dashboard. Python ML dependencies are
+not needed for the ESP32 camera proxy.
 
 The [CV/](CV/) package provides:
 
@@ -179,8 +228,8 @@ The [CV/](CV/) package provides:
 - expression classification using `trpakov/vit-face-expression`;
 - probability smoothing and confidence thresholds;
 - presence events, break prompts, and encouragement responses;
-- hand gestures for greeting, feedback, music playback, track navigation, and
-  circular volume control;
+- hand gestures for display slides, greeting, feedback, music playback, track
+  navigation, and circular volume control;
 - a safe recording music adapter that does not control the operating system by
   itself.
 

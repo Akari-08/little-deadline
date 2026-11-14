@@ -18,7 +18,7 @@ export interface PersonalTokenAuthOptions {
 }
 
 export const NO_PERSONAL_TOKEN_MESSAGE =
-  'No Canvas access token is saved. Create one in Canvas (Account > Settings > Approved Integrations > New Access Token) and save it with: npm run configure -- canvas-token';
+  'No Canvas access token is saved. Create one in Canvas (Account > Settings > Approved Integrations > New Access Token) and enter it in Lil Deadline Settings.';
 
 export class PersonalTokenAuth implements CanvasAuth {
   readonly kind = 'personal-token' as const;
@@ -32,7 +32,7 @@ export class PersonalTokenAuth implements CanvasAuth {
     const token = this.loadToken()?.trim() ?? '';
     if (!token) throw new ProviderAuthError(NO_PERSONAL_TOKEN_MESSAGE);
     if (!/^[\x21-\x7e]+$/.test(token)) {
-      throw new ProviderAuthError('The saved Canvas access token is not valid (it must be printable characters with no spaces). Save it again with: npm run configure -- canvas-token');
+      throw new ProviderAuthError('The saved Canvas access token is not valid (it must be printable characters with no spaces). Enter it again in Settings.');
     }
     return token;
   }

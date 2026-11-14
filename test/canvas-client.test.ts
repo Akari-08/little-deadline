@@ -132,7 +132,7 @@ test('401 with a personal token throws ProviderAuthError without retrying', asyn
   await assert.rejects(client(mock).client.getJson('/api/v1/users/self'), (error: unknown) => {
     assert.ok(error instanceof ProviderAuthError);
     assert.match(error.message, /expired or been revoked/);
-    assert.match(error.message, /canvas-token/);
+    assert.match(error.message, /Lil Deadline Settings/);
     assertNoSecrets(error);
     return true;
   });

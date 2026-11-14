@@ -1,7 +1,13 @@
 import { BRAND } from '../branding.ts';
 import { mood, remainingTime, type CompanionState } from '../pet/state.ts';
+import { DISPLAY_SLIDES, DISPLAY_SLIDE_LABELS } from '../pet/slides.ts';
 export const FACE_WIDTH = 240, FACE_HEIGHT = 320;
-export interface FaceState { companion: CompanionState; task: string | null; done: number; total: number; status: string }
+export interface FaceState {
+  companion: CompanionState; task: string | null; done: number; total: number; status: string;
+  tasks?: readonly { title: string; done: boolean }[];
+  music?: { connected: boolean; playback: string; track: string | null; artist: string | null; volume: number | null };
+  sensors?: { source: string; imu: string; environment: string; temperatureC: number | null; humidityPct: number | null; rssiDbm: number | null };
+}
 const sprite = [
   '        gg       ',
   '       gGGg      ',
@@ -31,6 +37,66 @@ export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now:
   const text = (value: string, x: number, y: number, size: number, color: string, align: CanvasTextAlign = 'left') => {
     ctx.fillStyle = color; ctx.font = `${size >= 14 ? '600' : '400'} ${size}px monospace`; ctx.textAlign = align; ctx.fillText(value, x, y);
   };
+  const fit = (value: string, width = 184, size = 12) => {
+    ctx.font = `600 ${size}px monospace`;
+    if (ctx.measureText(value).width <= width) return value;
+    let short = value;
+    while (short.length > 2 && ctx.measureText(short + '..').width > width) short = short.slice(0, -1);
+    return short + '..';
+  };
+  const slide = s.displaySlide;
+  if (slide !== 'pet') {
+    text('LIL DEADLINE', 16, 25, 11, '#d2e8d7');
+    text(`${DISPLAY_SLIDES.indexOf(slide) + 1} / ${DISPLAY_SLIDES.length}`, 224, 25, 10, '#a6b9a9', 'right');
+    text(DISPLAY_SLIDE_LABELS[slide].toUpperCase(), 16, 60, 21, '#c6e7a8');
+    ctx.fillStyle = '#31443f'; ctx.fillRect(16, 72, 208, 2);
+    if (slide === 'tasks') {
+      text(`${state.done} of ${state.total} little wins`, 16, 100, 12, '#c6e7a8');
+      const tasks = state.tasks?.filter(task => !task.done).slice(0, 4) ?? [];
+      if (!tasks.length) text('All clear for now.', 16, 143, 13, '#ebeee2');
+      tasks.forEach((task, index) => {
+        const y = 124 + index * 43;
+        ctx.fillStyle = '#111f24'; ctx.fillRect(12, y - 17, 216, 37);
+        ctx.strokeStyle = '#95b49a'; ctx.strokeRect(22, y - 7, 10, 10);
+        text(fit(task.title, 176, 11), 41, y + 2, 11, '#ebeee2');
+      });
+      text(state.total > 4 ? 'More tasks in the app' : 'One step at a time', 120, 301, 10, '#92aba0', 'center');
+    } else if (slide === 'focus') {
+      const seconds = Math.ceil(remainingTime(s, now) / 1000);
+      const clock = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+      text(s.timer.startedAt === null ? 'READY WHEN YOU ARE' : 'ONE THING AT A TIME', 120, 107, 11, '#a1b9ad', 'center');
+      text(clock, 120, 173, 44, '#e0d7ed', 'center');
+      text(s.timer.startedAt === null ? 'PAUSED' : 'FOCUSING', 120, 195, 11, '#b7dda5', 'center');
+      ctx.fillStyle = '#111f24'; ctx.fillRect(12, 222, 216, 62);
+      text('CURRENT TASK', 24, 240, 9, '#91ad9d');
+      text(fit(state.task ?? 'Choose a little task'), 24, 262, 12, '#ebeee2');
+      text(`${s.timer.sessions} sessions completed`, 120, 302, 10, '#92aba0', 'center');
+    } else if (slide === 'music') {
+      const music = state.music;
+      text(music?.connected ? music.playback.toUpperCase() : 'NOT LINKED', 120, 109, 12, '#b7dda5', 'center');
+      text('♪', 120, 182, 66, '#b7dda5', 'center');
+      ctx.fillStyle = '#111f24'; ctx.fillRect(12, 213, 216, 72);
+      text(fit(music?.track ?? 'Your little soundtrack'), 24, 239, 12, '#ebeee2');
+      text(fit(music?.artist ?? (music?.connected ? 'Start playback in Spotify' : 'Link Spotify in Settings'), 186, 10), 24, 259, 10, '#a1b9ad');
+      text(music?.volume == null ? 'VOLUME UNAVAILABLE' : `VOLUME ${Math.round(music.volume)}%`, 120, 302, 10, '#92aba0', 'center');
+    } else {
+      const sensors = state.sensors;
+      const source = sensors?.source === 'simulated' ? 'SIMULATED' : sensors?.source === 'device' ? 'DEVICE' : 'UNAVAILABLE';
+      text(source, 16, 102, 11, '#b7dda5');
+      const rows = [
+        ['IMU', sensors?.imu ?? 'unavailable'], ['ROOM TEMP', sensors?.temperatureC == null ? 'unavailable' : `${sensors.temperatureC.toFixed(1)} C`],
+        ['HUMIDITY', sensors?.humidityPct == null ? 'unavailable' : `${sensors.humidityPct.toFixed(1)} %`],
+        ['WI-FI', sensors?.rssiDbm == null ? 'unavailable' : `${sensors.rssiDbm} dBm`],
+      ];
+      rows.forEach(([label, value], index) => {
+        const y = 139 + index * 38;
+        ctx.fillStyle = '#111f24'; ctx.fillRect(12, y - 20, 216, 32);
+        text(label!, 21, y, 10, '#91ad9d'); text(fit(value!, 120, 11), 219, y, 11, '#ebeee2', 'right');
+      });
+      text(`ENV ${sensors?.environment ?? 'unavailable'}`, 120, 302, 10, '#92aba0', 'center');
+    }
+    ctx.restore(); return;
+  }
   text(BRAND.petName.toUpperCase(), 16, 25, 12, '#d2e8d7');
   text(`LV ${1 + Math.floor(s.pet.xp / 100)}`, 224, 25, 10, '#a6b9a9', 'right');
   text(feeling === 'celebrating' ? 'Look at you grow!' : feeling === 'sleepy' ? 'A little rest...' : feeling === 'focused' ? 'One thing at a time.' : 'Little steps count.', 120, 49, 11, '#a1b9ad', 'center');
@@ -64,6 +130,7 @@ export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now:
   text(truncated, 24, 277, 12, '#ebeee2');
   const seconds = Math.ceil(remainingTime(s, now) / 1000);
   text(s.timer.startedAt !== null ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} focus` : state.status, 120, 309, 9, '#92aba0', 'center');
+  text(`1 / ${DISPLAY_SLIDES.length}`, 224, 309, 9, '#92aba0', 'right');
   ctx.restore();
 }
 /** Optional RGB565-quantized preview; modifies the canonical surface before upload. */
