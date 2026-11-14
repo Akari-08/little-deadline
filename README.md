@@ -72,7 +72,7 @@ only `dist/` to public static hosting cannot connect to the device on your LAN.
 Fonts are bundled; preview mode needs no cloud service or Internet connection.
 
 Copy [.env.example](.env.example) to `.env` (gitignored) and set
-`ANTHROPIC_API_KEY` for Ask Sprout; optionally `LIL_DEADLINE_PORT` or
+`GEMINI_API_KEY` for Ask Sprout; optionally `LIL_DEADLINE_PORT` or
 `TASKPET_DATA_DIR`. All other credentials (device, Canvas, Notion, Spotify) go in
 the app's masked Settings fields, not in `.env`, command arguments, or public
 build variables.
@@ -176,12 +176,12 @@ data source UUID plus connection token. It reads the title property and optional
 ID is distinct from a database ID. Refreshes occur about every 15 minutes, and
 failures retain the last good snapshot. See [Notion details](docs/notion.md).
 
-**Ask Sprout (Claude study assistant):** users need no key of their own. Put
-the app's Claude API key in a local `.env` file as `ANTHROPIC_API_KEY=...` (copy
+**Ask Sprout (Gemini study assistant):** users need no key of their own. Put
+the app's Gemini API key in a local `.env` file as `GEMINI_API_KEY=...` (copy
 [.env.example](.env.example); `.env` is gitignored). The host reads it at
 startup and never sends it to the browser. Then open **Ask Sprout** in the
 sidebar and type a question, or pick a suggested one such as *"What's my most
-urgent assignment right now?"* Each question is sent to Anthropic's API along
+urgent assignment right now?"* Each question is sent to Google's Gemini API along
 with your task list from every provider (local, Canvas LMS, Notion), so answers
 can use your real deadlines. Device tokens and other credentials are never sent.
 The assistant is read-only: it cannot add, complete or submit anything. See

@@ -1,5 +1,5 @@
 /**
- * Deterministic, pure formatting of the app's state into the text block Claude reads.
+ * Deterministic, pure formatting of the app's state into the text block the model reads.
  *
  * Everything is computed from explicit inputs (AssistantContext) so it can be tested without
  * the network or a clock. Dates are rendered in the host's local time zone, and every task is

@@ -9,9 +9,9 @@ const vite = dev ? await (await import('vite')).createServer({ server: {
   middlewareMode: true, hmr: false,
   fs: { deny: ['.env', '.env.*', '**/secrets.json', '**/secrets.json.*', '**/.taskpet-data/**', '**/.git/**', '**/*.pem', '**/*.crt'] },
 }, appType: 'spa' }) : undefined;
-// The app-wide Claude key is read from .env (gitignored) and handed to the host only; it is never
+// The app-wide Gemini key is read from .env (gitignored) and handed to the host only; it is never
 // exposed to the browser bundle (no VITE_ prefix) and never logged.
-const app = new Application(undefined, { anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? null });
+const app = new Application(undefined, { geminiApiKey: process.env.GEMINI_API_KEY ?? null, geminiModel: process.env.GEMINI_MODEL ?? null });
 for (const warning of app.storage.warnings) console.warn(warning);
 const server = createAppServer(app, { dev: vite });
 server.on('error', async () => { console.error('Could not start Lil Deadline. Check whether the local port is already in use.'); await app.dispose(); await vite?.close(); process.exitCode = 1; });

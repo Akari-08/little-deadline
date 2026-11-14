@@ -1,13 +1,14 @@
 /**
- * Study assistant: a thin, read-only Claude wrapper over the app's task data.
+ * Study assistant: a thin, read-only Gemini wrapper over the app's task data.
  *
- * - The Anthropic API key comes only from the host secret store via `loadApiKey()`. It is never
- *   included in status(), the app snapshot, SSE output, logs or error messages.
- * - Each request sends a frozen (cacheable) system prompt, the prior conversation as plain text,
- *   and, in the latest user turn only, a freshly generated <app_state> block (context.ts).
+ * - The Gemini API key is the app-wide key from the host environment (.env → GEMINI_API_KEY),
+ *   handed in by the host. It is never included in status(), the app snapshot, SSE output, logs
+ *   or error messages, and it never reaches browser code.
+ * - Each request sends a fixed system instruction, the prior conversation as plain text, and, in
+ *   the latest user turn only, a freshly generated <app_state> block (context.ts).
  * - The assistant has no tools and cannot change tasks, Canvas or Notion.
  */
-import Anthropic from '@anthropic-ai/sdk';
+import { ApiError, GoogleGenAI, type Content, type GenerateContentParameters, type GenerateContentResponse } from '@google/genai';
 import type { TaskView } from '../tasks/store.ts';
 import type { SyncStatus } from '../tasks/sync.ts';
 import { formatAssistantContext } from './context.ts';
@@ -26,31 +27,38 @@ export interface AssistantContext {
   environment: { temperatureC: number | null; humidityPct: number | null; source: string };
 }
 
-/** Where the active key comes from: the app-wide key in .env, or one saved in Settings. */
-export type AssistantKeySource = 'app' | 'settings' | null;
-export interface AssistantStatus { configured: boolean; keySource: AssistantKeySource; model: string; suggestions: readonly string[] }
+export interface AssistantStatus { configured: boolean; model: string; suggestions: readonly string[] }
 
-/** Bad request from the UI (validation) or a state the user must fix (no key). Safe to show. */
+/** Bad request from the UI (validation) or a state the operator must fix (no key). Safe to show. */
 export class AssistantInputError extends Error {}
+/** Gemini sent nothing within FIRST_CHUNK_TIMEOUT_MS. */
+export class AssistantTimeoutError extends Error {}
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string }
 
 export interface ChatResult {
-  /** Claude's stop reason, or 'aborted' when the client cancelled. */
+  /** Gemini finish reason (e.g. STOP, MAX_TOKENS, SAFETY), 'BLOCKED', or 'aborted'. */
   stopReason: string | null;
-  /** User-facing note for unusual endings (refusal, cut off), else null. */
+  /** User-facing note for unusual endings (blocked, cut off), else null. */
   note: string | null;
 }
 
-export const ASSISTANT_MODEL = 'claude-opus-5-5';
+/** The part of the Gemini client the assistant uses (lets tests inject a fake). */
+export interface GeminiClient {
+  models: { generateContentStream(params: GenerateContentParameters): Promise<AsyncIterable<GenerateContentResponse>> };
+}
+
 /**
- * Q&A over pre-bucketed, structured task data is light reasoning; `medium` (Opus 5.5's default,
- * set explicitly) keeps date matching and planning reliable without the latency of `high`.
+ * Default model. `gemini-4-hydrogen` is Google's recommended fast, low-cost model for new projects
+ * (verified against the official model list and a live call, 2026-11-13). Override with GEMINI_MODEL.
  */
-export const ASSISTANT_EFFORT = 'medium' as const;
+export const DEFAULT_ASSISTANT_MODEL = 'gemini-4-hydrogen';
 export const MAX_TURNS = 40;
 export const MAX_TURN_CHARS = 4000;
+export const FIRST_CHUNK_TIMEOUT_MS = 45_000;
+const MAX_OUTPUT_TOKENS = 8192;
 const MAX_CONCURRENT = 2;
+const NO_KEY = 'Ask Sprout isn’t set up on this computer yet: add GEMINI_API_KEY to the app’s .env file and restart.';
 
 /** Validate untrusted chat history from the UI. Throws AssistantInputError. */
 export function validateChatMessages(raw: unknown): ChatTurn[] {
@@ -70,91 +78,110 @@ export function validateChatMessages(raw: unknown): ChatTurn[] {
   return turns;
 }
 
-/** Map any failure to a short user-facing message. Never includes credentials. */
+/** Map any failure to a short user-facing message. Never includes credentials or raw API text. */
 export function describeAssistantError(error: unknown): string {
   if (error instanceof AssistantInputError) return error.message;
-  if (error instanceof Anthropic.APIUserAbortError) return 'Stopped.';
-  if (error instanceof Anthropic.AuthenticationError) return 'The Claude API key was rejected. Check ANTHROPIC_API_KEY in .env (or the key in Settings).';
-  if (error instanceof Anthropic.PermissionDeniedError) return 'This Claude API key is not allowed to use this model. Check the key’s workspace in the Claude Console.';
-  if (error instanceof Anthropic.NotFoundError) return 'The Claude model is not available to this API key.';
-  if (error instanceof Anthropic.RateLimitError) return 'Claude is rate-limiting this API key. Wait a moment and try again.';
-  // The API reports an empty balance as a 400 invalid_request_error with no distinct type.
-  if (error instanceof Anthropic.BadRequestError && /credit balance/i.test(error.message)) return 'Ask Sprout is paused: the Claude account behind this app is out of credits. Add credits under Plans & Billing in the Claude Console.';
-  if (error instanceof Anthropic.BadRequestError) return 'Claude could not process this request. Check your API key’s billing and limits in the Claude Console, or clear the conversation and retry.';
-  if (error instanceof Anthropic.InternalServerError) return 'Claude is temporarily unavailable or overloaded. Try again shortly.';
-  if (error instanceof Anthropic.APIConnectionTimeoutError) return 'Claude took too long to respond. Try again.';
-  if (error instanceof Anthropic.APIConnectionError) return 'Could not reach the Claude API. Check this computer’s internet connection.';
-  if (error instanceof Anthropic.APIError) return `Claude API error${typeof error.status === 'number' ? ` (${error.status})` : ''}. Try again.`;
+  if (error instanceof AssistantTimeoutError) return 'Gemini didn’t respond in time. Try again in a moment.';
+  if (error instanceof ApiError) {
+    const s = error.status;
+    // An invalid key is reported as 400 INVALID_ARGUMENT with this reason; no distinct status exists.
+    if (s === 400 && /API[_ ]KEY[_ ]INVALID|API key not valid/i.test(error.message)) return 'The Gemini API key was rejected. Check GEMINI_API_KEY in the app’s .env file.';
+    if (s === 401 || s === 403) return 'This Gemini API key isn’t allowed to use the assistant model. Check the key in Google AI Studio.';
+    if (s === 404) return 'The Gemini model isn’t available to this API key. Set GEMINI_MODEL in .env to a model the key can use.';
+    if (s === 429) return 'Gemini’s usage limit for this API key was reached. Wait a moment and try again.';
+    if (s === 400) return 'Gemini couldn’t process this request. Clear the conversation and try again.';
+    if (s >= 500) return 'Gemini is temporarily unavailable or overloaded. Try again shortly.';
+    return `Gemini API error (${s}). Try again.`;
+  }
+  if (error instanceof TypeError) return 'Could not reach the Gemini API. Check this computer’s internet connection.';
   return 'The assistant could not answer. Try again.';
 }
 
-function stopNote(stopReason: string | null): string | null {
-  switch (stopReason) {
-    case 'refusal': return 'Sprout can’t help with that request. Try rephrasing it.';
-    case 'max_tokens': return 'This answer was cut off because it got too long. Ask a narrower follow-up.';
-    case 'model_context_window_exceeded': return 'This conversation is too long. Clear it and start a new one.';
-    default: return null;
+function finishNote(reason: string | null): string | null {
+  switch (reason) {
+    case null: case 'STOP': case 'FINISH_REASON_UNSPECIFIED': return null;
+    case 'MAX_TOKENS': return 'This answer was cut off because it got too long. Ask a narrower follow-up.';
+    case 'BLOCKED': case 'SAFETY': case 'PROHIBITED_CONTENT': case 'BLOCKLIST': case 'SPII': case 'RECITATION':
+      return 'Sprout can’t help with that request. Try rephrasing it.';
+    default: return 'This answer ended early. Try asking again.';
   }
 }
 
-/** Build the Messages API request. Exported for tests; deterministic for a given context. */
-export function buildRequest(turns: readonly ChatTurn[], context: AssistantContext): Anthropic.Beta.Messages.MessageCreateParamsNonStreaming {
-  const history: Anthropic.Beta.BetaMessageParam[] = turns.slice(0, -1).map(t => ({ role: t.role, content: t.content }));
+/** Build the generateContent request. Exported for tests; deterministic for a given context. */
+export function buildRequest(turns: readonly ChatTurn[], context: AssistantContext, model = DEFAULT_ASSISTANT_MODEL): GenerateContentParameters {
+  const history: Content[] = turns.slice(0, -1).map(t => ({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.content }] }));
   const question = turns.at(-1)!.content;
   return {
-    model: ASSISTANT_MODEL,
-    max_tokens: 16_000,
-    // Adaptive thinking is the only mode on Opus 5.5; depth is controlled with effort.
-    thinking: { type: 'adaptive' },
-    output_config: { effort: ASSISTANT_EFFORT },
-    // Server-side refusal fallback (opt-in): reroutes a policy decline to the default fallback model.
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
-    // Frozen system prompt, cached. Volatile state goes in the latest user turn below.
-    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-    messages: [...history, { role: 'user', content: [
-      { type: 'text', text: formatAssistantContext(context) },
-      { type: 'text', text: question },
-    ] }],
+    model,
+    contents: [...history, { role: 'user', parts: [{ text: formatAssistantContext(context) }, { text: question }] }],
+    config: { systemInstruction: SYSTEM_PROMPT, maxOutputTokens: MAX_OUTPUT_TOKENS },
   };
 }
 
+/** Visible answer text in one streamed chunk (thought-summary parts are skipped). */
+function chunkText(chunk: GenerateContentResponse): string {
+  const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+  return parts.filter(p => typeof p.text === 'string' && !p.thought).map(p => p.text).join('');
+}
+
 export class Assistant {
-  private readonly options: { loadApiKey: () => string | null; context: () => AssistantContext; createClient?: (apiKey: string) => Anthropic; keySource?: () => AssistantKeySource };
+  private readonly options: { apiKey: string | null; model?: string; context: () => AssistantContext; createClient?: (apiKey: string) => GeminiClient; firstChunkTimeoutMs?: number };
   private active = 0;
 
-  constructor(options: { loadApiKey: () => string | null; context: () => AssistantContext; createClient?: (apiKey: string) => Anthropic; keySource?: () => AssistantKeySource }) {
+  constructor(options: { apiKey: string | null; model?: string; context: () => AssistantContext; createClient?: (apiKey: string) => GeminiClient; firstChunkTimeoutMs?: number }) {
     this.options = options;
   }
 
+  get model(): string { return this.options.model || DEFAULT_ASSISTANT_MODEL; }
+
   status(): AssistantStatus {
-    const configured = !!this.options.loadApiKey();
-    return { configured, keySource: configured ? this.options.keySource?.() ?? 'settings' : null, model: ASSISTANT_MODEL, suggestions: SUGGESTED_QUESTIONS };
+    return { configured: !!this.options.apiKey, model: this.model, suggestions: SUGGESTED_QUESTIONS };
   }
 
   /**
-   * Stream one answer. Calls `onText` with text deltas as they arrive. Resolves with the stop
-   * reason (or 'aborted'); rejects with AssistantInputError for bad input/no key and with SDK
-   * errors for API failures (use describeAssistantError for display).
+   * Stream one answer. Calls `onText` with text deltas as they arrive. Resolves with the finish
+   * reason (or 'aborted'); rejects with AssistantInputError for bad input/no key, and with
+   * AssistantTimeoutError / SDK errors for API failures (use describeAssistantError for display).
    */
   async chat(rawTurns: unknown, onText: (delta: string) => void, signal?: AbortSignal): Promise<ChatResult> {
     const turns = validateChatMessages(rawTurns);
-    const apiKey = this.options.loadApiKey();
-    if (!apiKey) throw new AssistantInputError('Add your Claude API key in Settings to use the assistant.');
+    const apiKey = this.options.apiKey;
+    if (!apiKey) throw new AssistantInputError(NO_KEY);
     if (this.active >= MAX_CONCURRENT) throw new AssistantInputError('Sprout is still answering another question. Try again in a moment.');
     this.active += 1;
+    // One controller for client aborts and the first-chunk watchdog (some models can stall silently).
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) controller.abort();
+    let timedOut = false;
+    const watchdog = setTimeout(() => { timedOut = true; controller.abort(); }, this.options.firstChunkTimeoutMs ?? FIRST_CHUNK_TIMEOUT_MS);
     try {
-      const client = this.options.createClient ? this.options.createClient(apiKey) : new Anthropic({ apiKey, maxRetries: 2, timeout: 120_000 });
-      const stream = client.beta.messages.stream(buildRequest(turns, this.options.context()), { signal });
-      stream.on('text', delta => { if (!signal?.aborted) onText(delta); });
+      const client = this.options.createClient ? this.options.createClient(apiKey) : new GoogleGenAI({ apiKey });
+      const request = buildRequest(turns, this.options.context(), this.model);
+      request.config = { ...request.config, abortSignal: controller.signal };
+      let finish: string | null = null;
       try {
-        const message = await stream.finalMessage();
-        return { stopReason: message.stop_reason, note: stopNote(message.stop_reason) };
+        const stream = await client.models.generateContentStream(request);
+        for await (const chunk of stream) {
+          clearTimeout(watchdog);
+          if (controller.signal.aborted) break;
+          if (chunk.promptFeedback?.blockReason) finish = 'BLOCKED';
+          const text = chunkText(chunk);
+          if (text) onText(text);
+          finish = chunk.candidates?.[0]?.finishReason ?? finish;
+        }
       } catch (error) {
-        if (error instanceof Anthropic.APIUserAbortError || signal?.aborted) return { stopReason: 'aborted', note: null };
+        if (timedOut) throw new AssistantTimeoutError('No response from Gemini.');
+        if (signal?.aborted) return { stopReason: 'aborted', note: null };
         throw error;
       }
+      if (timedOut) throw new AssistantTimeoutError('No response from Gemini.');
+      if (signal?.aborted) return { stopReason: 'aborted', note: null };
+      return { stopReason: finish, note: finishNote(finish) };
     } finally {
+      clearTimeout(watchdog);
+      signal?.removeEventListener('abort', onAbort);
       this.active -= 1;
     }
   }

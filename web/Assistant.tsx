@@ -159,11 +159,11 @@ export function AssistantPage({ s, openSettings }: { s: AppSnapshot; openSetting
 
   return <section className="assistant-card card">
     <div className="card-top"><div><span className="eyebrow">ASK SPROUT</span><h2>Your study assistant</h2></div>
-      <div className="assistant-top-actions"><span className="pill lilac">{configured ? 'Claude · read-only' : 'not set up'}</span>
+      <div className="assistant-top-actions"><span className="pill lilac">{configured ? 'Gemini · read-only' : 'not set up'}</span>
         <button type="button" className="text-button" onClick={clear} disabled={!exchanges.length}>Clear conversation</button></div></div>
-    {!configured ? <div className="empty"><span className="assistant-avatar large">✦</span><h3>Sprout needs a Claude API key to chat.</h3>
-      <p>Add your key in Settings. It stays in this computer’s private settings file and is never sent to the browser.</p>
-      <button className="primary" onClick={openSettings}>Open Settings</button></div> : <>
+    {!configured ? <div className="empty"><span className="assistant-avatar large">✦</span><h3>Ask Sprout isn’t set up yet.</h3>
+      <p>The app’s Gemini key is missing. Add <code>GEMINI_API_KEY</code> to the app’s <code>.env</code> file and restart the app.</p>
+      <button className="secondary" onClick={openSettings}>View assistant status</button></div> : <>
       <div className="assistant-log" ref={list} aria-live="polite">
         {!exchanges.length ? <div className="assistant-welcome"><span className="assistant-avatar large">✦</span><h3>What would you like to know?</h3>
           <p>I can see your Canvas, Notion and local tasks. Try one of these:</p>{chips(false)}</div>
@@ -185,34 +185,18 @@ export function AssistantPage({ s, openSettings }: { s: AppSnapshot; openSetting
         {busy ? <button type="button" className="secondary" onClick={() => controller.current?.abort()}>■ Stop</button>
           : <button className="primary" disabled={!draft.trim()}>Send</button>}
       </form>
-      <p className="fineprint">Enter to send · Shift+Enter for a new line. To answer, your question and your task list (titles, courses, due dates, links) are sent to Anthropic’s Claude API. Device tokens and other credentials are never sent. Sprout is read-only: it can’t change tasks, submit coursework or edit Canvas or Notion.</p>
+      <p className="fineprint">Enter to send · Shift+Enter for a new line. To answer, your question and your task list (titles, courses, due dates, links) are sent to Google’s Gemini API. Device tokens and other credentials are never sent. Sprout is read-only: it can’t change tasks, submit coursework or edit Canvas or Notion.</p>
     </>}
   </section>;
 }
 
-export function AssistantSettings({ s, action }: { s: AppSnapshot; action: Action }) {
-  const [message, setMessage] = useState('');
-  const saved = s.secrets.anthropicApiKeySet;
-  if (s.assistant.keySource === 'app') {
-    return <section className="card settings-card"><span className="integration-logo">✦</span><span className="pill green">ready</span>
-      <h2>Study assistant (Claude)</h2><p>Ask Sprout is ready to chat — no API key needed. This app provides one.</p>
-      <p className="fineprint">The app’s Claude key is configured on the host (in its private <code>.env</code>) and never reaches the browser. Questions and your task list are sent to Anthropic to generate answers. Model: {s.assistant.model}.</p>
-    </section>;
-  }
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget, field = form.elements.namedItem('token') as HTMLInputElement;
-    if (await action('/api/settings/assistant', { token: field.value })) { field.value = ''; setMessage('Claude API key saved on this computer.'); }
-  }
-  return <section className="card settings-card"><span className="integration-logo">✦</span><span className="pill lilac">{saved ? 'key saved' : 'unconfigured'}</span>
-    <h2>Study assistant (Claude)</h2><p>Ask Sprout questions about your deadlines. Uses your own Anthropic API key.</p>
-    <form onSubmit={e => void submit(e)}>
-      <label>Claude API key<input name="token" type="password" autoComplete="new-password" spellCheck={false} autoCapitalize="none" required
-        placeholder={saved ? 'Saved · enter a new key to replace' : 'sk-ant-…'} maxLength={512}/></label>
-      <button className="primary">Save API key</button>
-    </form>
-    <div className="connection-actions"><button className="text-button" disabled={!saved} onClick={async () => { if (await action('/api/settings/assistant', { clearToken: true })) setMessage('Claude API key removed.'); }}>Remove key</button></div>
-    {message && <p className="inline-note" role="status">{message}</p>}
-    <p className="fineprint">Create a key at console.anthropic.com → API Keys. The key is stored only in the host’s private secrets file, never in the browser, logs or the repository. Questions and your task list are sent to Anthropic to generate answers; usage is billed to your Anthropic account. Model: {s.assistant.model}.</p>
+/** Read-only status card: the app supplies the Gemini key, so users have nothing to enter. */
+export function AssistantSettings({ s }: { s: AppSnapshot; action?: Action }) {
+  const ready = s.assistant.configured;
+  return <section className="card settings-card"><span className="integration-logo">✦</span><span className={`pill ${ready ? 'green' : 'lilac'}`}>{ready ? 'ready' : 'not set up'}</span>
+    <h2>Study assistant (Gemini)</h2>
+    <p>{ready ? 'Ask Sprout is ready to chat — no API key needed. This app provides one.' : 'Ask Sprout isn’t set up on this computer yet.'}</p>
+    {!ready && <p className="inline-note">Add <code>GEMINI_API_KEY</code> to the app’s <code>.env</code> file, then restart the app.</p>}
+    <p className="fineprint">The app’s Gemini key is configured on the host (in its private <code>.env</code>) and never reaches the browser. Questions and your task list are sent to Google’s Gemini API to generate answers. Model: {s.assistant.model}.</p>
   </section>;
 }

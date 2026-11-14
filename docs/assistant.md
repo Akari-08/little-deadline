@@ -1,31 +1,29 @@
-# Ask Sprout — Claude study assistant
+# Ask Sprout — Gemini study assistant
 
 Ask Sprout answers questions about your deadlines, courses and week. Example
 questions: "Do I have a lab this week for CHEM?" or "What's my most urgent
-assignment right now?" The local host calls the Claude API with the official
-`@anthropic-ai/sdk`. The browser never talks to Anthropic directly and never
-sees the API key.
+assignment right now?" The local host calls Google's Gemini API with the
+official `@google/genai` SDK. The browser never talks to Google directly and
+never sees the API key.
 
-## Setup
+## Setup (once per computer that runs the host)
 
-Users don't need their own key. The app supplies one app-wide Claude key:
+Users don't need their own key. The app supplies one app-wide Gemini key:
 
-1. Copy `.env.example` to `.env` in the repo root. `.env` is gitignored and never
-   committed.
-2. Set `ANTHROPIC_API_KEY=` to the app's key from
-   [console.anthropic.com](https://console.anthropic.com/). The account behind it
-   needs credits, because usage is billed there.
-3. Start the app (`npm run dev` / `npm start`). The host reads `.env` at startup
+1. Copy `.env.example` to `.env` in the repo root. `.env` is gitignored and
+   never committed.
+2. Set `GEMINI_API_KEY=` to the app's key from
+   [Google AI Studio](https://aistudio.google.com/).
+3. Optional: set `GEMINI_MODEL=` to override the default model, `gemini-4-hydrogen`.
+4. Start the app (`npm run dev` / `npm start`). The host reads `.env` at startup
    and keeps the key in memory. It never reaches the browser bundle (no `VITE_`
    prefix, and Vite is denied access to `.env`), logs, URLs or the `/api/state`
-   snapshot. The UI only sees `assistant.keySource: "app"`.
+   snapshot. The UI only sees `assistant.configured: true/false`.
 
-Settings → Study assistant then just shows **ready**. If `.env` has no key,
-or an invalid one, that card falls back to a masked field. A key saved there is
-stored in the host's private `secrets.json`. The app-wide key always takes
-precedence.
+Settings → Study assistant shows **ready**, or "not set up" if `.env` has no
+valid key. There is no per-user key field.
 
-## What is sent to Anthropic
+## What is sent to Google
 
 Every question is sent together with a context block built on the host
 (`src/assistant/context.ts`). It contains:
@@ -46,10 +44,12 @@ to say so when asked about something that isn't in the data.
 
 ## Behaviour
 
-- Model: `claude-opus-5-5`, adaptive thinking, effort `medium`, streamed.
-- Server-side refusal fallback is enabled (`fallbacks: "default"`, beta
-  `server-side-fallback-2026-07-01`). If the primary model declines a request,
-  the API retries it on a fallback model within the same call.
+- Model: `gemini-4-hydrogen` by default (Google's recommended fast model for new
+  projects), streamed. Override it with `GEMINI_MODEL`.
+- If Gemini sends nothing within 45 s, the request is cancelled and the chat
+  says "Gemini didn't respond in time". Some models can stall silently.
+- Blocked or safety-stopped answers show "Sprout can't help with that request".
+  Answers that hit the length limit say they were cut off.
 - Read-only: it cannot add, complete or submit tasks, or change Canvas/Notion.
   Checking a task in Lil Deadline is still not a Canvas submission.
 - Task titles are wrapped in tags and treated as untrusted data, not instructions.
@@ -66,7 +66,7 @@ to say so when asked about something that isn't in the data.
 ```
 
 Messages alternate user/assistant and start and end with `user`. There are at
-most 40 messages, each at most 4000 characters. Bad input, or no saved key,
+most 40 messages, each at most 4000 characters. Bad input, or no key configured,
 returns HTTP 400 with `{ "error": "..." }`. Otherwise the response is
 `text/event-stream` with these events:
 
@@ -77,12 +77,11 @@ returns HTTP 400 with `{ "error": "..." }`. Otherwise the response is
 | `done`  | `{ "stopReason": "...", "note": ... }`|
 | `error` | `{ "message": "..." }`                |
 
-Disconnecting aborts the upstream request. At most two requests run at once.
-
-If the Claude account runs out of credits, chat shows "Ask Sprout is paused:
-the Claude account behind this app is out of credits" until credits are added.
+`stopReason` is Gemini's finish reason (`STOP`, `MAX_TOKENS`, `SAFETY`, …),
+`BLOCKED`, or `aborted`. Disconnecting aborts the upstream request. At most two
+requests run at once.
 
 ## Tests
 
-`test/assistant.test.ts` uses an injected fake client, so the suite never calls
-the real API and needs no key.
+`test/assistant.test.ts` uses an injected fake Gemini client, so the suite never
+calls the real API and needs no key.

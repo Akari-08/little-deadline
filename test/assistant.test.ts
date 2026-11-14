@@ -4,18 +4,18 @@ import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import Anthropic from '@anthropic-ai/sdk';
+import { ApiError, type GenerateContentParameters } from '@google/genai';
 import { Application } from '../src/host/application.ts';
 import { AppStorage } from '../src/host/storage.ts';
 import { createAppServer } from '../src/host/server.ts';
-import { Assistant, AssistantInputError, buildRequest, describeAssistantError, validateChatMessages, type AssistantContext } from '../src/assistant/service.ts';
+import { Assistant, AssistantInputError, AssistantTimeoutError, DEFAULT_ASSISTANT_MODEL, buildRequest, describeAssistantError, validateChatMessages, type AssistantContext, type GeminiClient } from '../src/assistant/service.ts';
 import { dueBucket, formatAssistantContext, localTime, relative, weekRange, formatDay } from '../src/assistant/context.ts';
 import { SYSTEM_PROMPT } from '../src/assistant/prompt.ts';
 import type { TaskView } from '../src/tasks/store.ts';
 import type { SyncStatus } from '../src/tasks/sync.ts';
 
 // A syntactically valid but fake key. Tests must never call the real API.
-const FAKE_KEY = 'sk-ant-test-FAKEKEY-0123456789abcdef';
+const FAKE_KEY = 'AQ.test-FAKEKEY-0123456789abcdef';
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 
 function sync(health: SyncStatus['provider']['health'], extra: Partial<SyncStatus> = {}, message: string | null = null): SyncStatus {
@@ -33,29 +33,36 @@ function context(overrides: Partial<AssistantContext> = {}): AssistantContext {
     environment: { temperatureC: null, humidityPct: null, source: 'unavailable' }, ...overrides };
 }
 
-interface FakeScript { deltas?: string[]; stopReason?: string; error?: unknown; delayMs?: number; hang?: boolean }
-function fakeClient(script: FakeScript, calls: { params: unknown; keys: string[] }) {
-  return (apiKey: string) => {
+interface FakeScript { deltas?: string[]; finishReason?: string; blockReason?: string; error?: unknown; delayMs?: number; hang?: boolean; thoughts?: string[] }
+type Calls = { params: GenerateContentParameters | null; keys: string[] };
+const newCalls = (): Calls => ({ params: null, keys: [] });
+const chunk = (value: unknown) => value as never;
+
+/** Fake Gemini client: streams text chunks and honours config.abortSignal like the real SDK. */
+function fakeClient(script: FakeScript, calls: Calls) {
+  return (apiKey: string): GeminiClient => {
     calls.keys.push(apiKey);
-    return { beta: { messages: { stream(params: unknown, options?: { signal?: AbortSignal }) {
+    return { models: { async generateContentStream(params) {
       calls.params = params;
-      const listeners: ((delta: string) => void)[] = [];
-      return {
-        on(event: string, listener: (delta: string) => void) { if (event === 'text') listeners.push(listener); return this; },
-        finalMessage: () => new Promise((resolve, reject) => {
-          const signal = options?.signal;
-          const abort = () => reject(new Anthropic.APIUserAbortError());
-          if (signal?.aborted) return abort();
-          signal?.addEventListener('abort', abort, { once: true });
-          if (script.hang) return;
-          setTimeout(() => {
-            if (script.error) return reject(script.error);
-            for (const d of script.deltas ?? []) for (const l of listeners) l(d);
-            resolve({ stop_reason: script.stopReason ?? 'end_turn', content: [] });
-          }, script.delayMs ?? 0);
-        }),
-      };
-    } } } } as unknown as Anthropic;
+      const signal = params.config?.abortSignal;
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        if (signal?.aborted) return abort();
+        signal?.addEventListener('abort', abort, { once: true });
+        if (!script.hang) setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, script.delayMs ?? 0);
+      });
+      if (script.error) throw script.error;
+      return (async function* () {
+        if (script.blockReason) { yield chunk({ promptFeedback: { blockReason: script.blockReason } }); return; }
+        for (const t of script.thoughts ?? []) yield chunk({ candidates: [{ content: { role: 'model', parts: [{ text: t, thought: true }] } }] });
+        const deltas = script.deltas ?? [];
+        for (const [i, d] of deltas.entries()) {
+          const last = i === deltas.length - 1;
+          yield chunk({ candidates: [{ content: { role: 'model', parts: [{ text: d }] }, ...(last ? { finishReason: script.finishReason ?? 'STOP' } : {}) }] });
+        }
+        if (!deltas.length) yield chunk({ candidates: [{ content: { role: 'model', parts: [] }, finishReason: script.finishReason ?? 'STOP' }] });
+      })();
+    } } };
   };
 }
 
@@ -137,23 +144,21 @@ test('context truncation is stated, never silent', () => {
 
 // --- Request shape -------------------------------------------------------------------
 
-test('request: frozen cached system prompt, context only in the latest user turn', () => {
+
+test('request: fixed system instruction, Gemini roles, context only in the latest user turn', () => {
   const ctx = context({ tasks: [task({ title: 'Essay' })] });
   const req = buildRequest([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }, { role: 'user', content: 'What is due?' }], ctx);
-  assert.equal(req.model, 'claude-opus-5-5');
-  assert.deepEqual(req.thinking, { type: 'adaptive' });
-  assert.equal(req.output_config?.effort, 'medium');
-  assert.equal(req.fallbacks, 'default');
-  assert.deepEqual(req.betas, ['server-side-fallback-2026-07-01']);
-  assert.ok(Array.isArray(req.system) && req.system[0]!.text === SYSTEM_PROMPT && req.system[0]!.cache_control?.type === 'ephemeral');
-  assert.doesNotMatch(SYSTEM_PROMPT, /20\d\d-\d\d-\d\d/, 'no dates in the cached prompt');
-  assert.deepEqual(req.messages.slice(0, 2), [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }]);
-  const last = req.messages[2]!;
+  assert.equal(req.model, DEFAULT_ASSISTANT_MODEL);
+  assert.equal(req.config?.systemInstruction, SYSTEM_PROMPT);
+  assert.ok((req.config?.maxOutputTokens ?? 0) >= 4096);
+  assert.doesNotMatch(SYSTEM_PROMPT, /20\d\d-\d\d-\d\d/, 'no dates in the fixed prompt');
+  const contents = req.contents as { role: string; parts: { text: string }[] }[];
+  assert.deepEqual(contents.slice(0, 2), [{ role: 'user', parts: [{ text: 'hi' }] }, { role: 'model', parts: [{ text: 'hello' }] }]);
+  const last = contents[2]!;
   assert.equal(last.role, 'user');
-  assert.ok(Array.isArray(last.content));
-  const [state, question] = last.content as { type: string; text: string }[];
-  assert.match(state!.text, /^<app_state>/);
-  assert.equal(question!.text, 'What is due?');
+  assert.match(last.parts[0]!.text, /^<app_state>/);
+  assert.equal(last.parts[1]!.text, 'What is due?');
+  assert.equal(buildRequest([{ role: 'user', content: 'x' }], ctx, 'gemini-3.5-flash-lite').model, 'gemini-3.5-flash-lite');
   // Same inputs → byte-identical request (deterministic).
   assert.equal(JSON.stringify(buildRequest([{ role: 'user', content: 'x' }], ctx)), JSON.stringify(buildRequest([{ role: 'user', content: 'x' }], ctx)));
 });
@@ -170,30 +175,33 @@ test('chat input validation', () => {
 
 // --- Service streaming ---------------------------------------------------------------
 
-test('streams deltas and reports stop reasons', async () => {
-  const calls = { params: null as unknown, keys: [] as string[] };
-  let script: FakeScript = { deltas: ['Your ', 'lab is ', 'Thursday.'] };
-  const assistant = new Assistant({ loadApiKey: () => FAKE_KEY, context: () => context(), createClient: key => fakeClient(script, calls)(key) });
+test('streams deltas, skips thought parts, and reports finish reasons', async () => {
+  const calls = newCalls();
+  let script: FakeScript = { deltas: ['Your ', 'lab is ', 'Thursday.'], thoughts: ['(hidden reasoning)'] };
+  const assistant = new Assistant({ apiKey: FAKE_KEY, context: () => context(), createClient: key => fakeClient(script, calls)(key) });
   const out: string[] = [];
   const result = await assistant.chat([{ role: 'user', content: 'lab?' }], d => out.push(d));
   assert.equal(out.join(''), 'Your lab is Thursday.');
-  assert.deepEqual(result, { stopReason: 'end_turn', note: null });
+  assert.deepEqual(result, { stopReason: 'STOP', note: null });
   assert.deepEqual(calls.keys, [FAKE_KEY]);
+  assert.ok(calls.params?.config?.abortSignal instanceof AbortSignal, 'request is abortable');
 
-  script = { deltas: [], stopReason: 'refusal' };
+  script = { deltas: [], finishReason: 'SAFETY' };
   assert.match((await assistant.chat([{ role: 'user', content: 'x' }], () => {})).note ?? '', /can’t help/);
-  script = { deltas: ['long'], stopReason: 'max_tokens' };
+  script = { blockReason: 'PROHIBITED_CONTENT' };
+  assert.deepEqual(await assistant.chat([{ role: 'user', content: 'x' }], () => {}), { stopReason: 'BLOCKED', note: 'Sprout can’t help with that request. Try rephrasing it.' });
+  script = { deltas: ['long'], finishReason: 'MAX_TOKENS' };
   assert.match((await assistant.chat([{ role: 'user', content: 'x' }], () => {})).note ?? '', /cut off/);
 });
 
-test('missing key, abort and concurrency limits', async () => {
-  const calls = { params: null as unknown, keys: [] as string[] };
-  const none = new Assistant({ loadApiKey: () => null, context: () => context(), createClient: fakeClient({}, calls) });
+test('missing key, abort, first-chunk timeout and concurrency limits', async () => {
+  const calls = newCalls();
+  const none = new Assistant({ apiKey: null, context: () => context(), createClient: fakeClient({}, calls) });
   assert.equal(none.status().configured, false);
-  await assert.rejects(none.chat([{ role: 'user', content: 'x' }], () => {}), /Claude API key in Settings/);
+  await assert.rejects(none.chat([{ role: 'user', content: 'x' }], () => {}), /GEMINI_API_KEY/);
   assert.equal(calls.keys.length, 0);
 
-  const hanging = new Assistant({ loadApiKey: () => FAKE_KEY, context: () => context(), createClient: fakeClient({ hang: true }, calls) });
+  const hanging = new Assistant({ apiKey: FAKE_KEY, context: () => context(), createClient: fakeClient({ hang: true }, calls) });
   const controller = new AbortController();
   const pending = hanging.chat([{ role: 'user', content: 'x' }], () => {}, controller.signal);
   const second = hanging.chat([{ role: 'user', content: 'y' }], () => {}, controller.signal);
@@ -201,36 +209,39 @@ test('missing key, abort and concurrency limits', async () => {
   controller.abort();
   assert.deepEqual(await pending, { stopReason: 'aborted', note: null });
   assert.deepEqual(await second, { stopReason: 'aborted', note: null });
+
+  // A model that never sends anything is cut off by the watchdog with a clear message.
+  const stalled = new Assistant({ apiKey: FAKE_KEY, context: () => context(), createClient: fakeClient({ hang: true }, calls), firstChunkTimeoutMs: 50 });
+  const error = await stalled.chat([{ role: 'user', content: 'x' }], () => {}).then(() => null, (e: unknown) => e);
+  assert.ok(error instanceof AssistantTimeoutError);
+  assert.match(describeAssistantError(error), /didn’t respond in time/);
 });
 
 test('API errors map to safe user-facing messages', async () => {
-  const headers = new Headers();
   const cases: [unknown, RegExp][] = [
-    [new Anthropic.AuthenticationError(401, {}, 'invalid x-api-key', headers), /API key was rejected\. Check ANTHROPIC_API_KEY/],
-    [new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } }, undefined, headers), /out of credits/],
-    [new Anthropic.RateLimitError(429, {}, 'rate', headers), /rate-limiting/],
-    [new Anthropic.PermissionDeniedError(403, {}, 'no', headers), /not allowed/],
-    [new Anthropic.NotFoundError(404, {}, 'model', headers), /not available/],
-    [new Anthropic.BadRequestError(400, {}, 'bad', headers), /could not process/],
-    [new Anthropic.InternalServerError(500, {}, 'boom', headers), /temporarily unavailable/],
-    [new Anthropic.OverloadedError(529, {}, 'overloaded', headers), /overloaded/],
-    [new Anthropic.APIConnectionTimeoutError(), /too long/],
-    [new Anthropic.APIConnectionError({ message: 'ECONNRESET' }), /internet connection/],
+    [new ApiError({ status: 400, message: '{"error":{"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}' }), /key was rejected\. Check GEMINI_API_KEY/],
+    [new ApiError({ status: 403, message: 'permission denied' }), /isn’t allowed/],
+    [new ApiError({ status: 404, message: 'model not found' }), /GEMINI_MODEL/],
+    [new ApiError({ status: 429, message: 'quota' }), /usage limit/],
+    [new ApiError({ status: 400, message: 'bad' }), /couldn’t process/],
+    [new ApiError({ status: 503, message: 'overloaded' }), /temporarily unavailable/],
+    [new TypeError('fetch failed'), /internet connection/],
     [new Error('anything'), /could not answer/],
   ];
   for (const [error, pattern] of cases) assert.match(describeAssistantError(error), pattern);
-  const calls = { params: null as unknown, keys: [] as string[] };
-  const assistant = new Assistant({ loadApiKey: () => FAKE_KEY, context: () => context(), createClient: fakeClient({ error: cases[0]![0] }, calls) });
-  await assert.rejects(assistant.chat([{ role: 'user', content: 'x' }], () => {}), Anthropic.AuthenticationError);
+  for (const [error] of cases) assert.ok(!describeAssistantError(error).includes('INVALID_ARGUMENT'), 'raw API text is never shown');
+  const assistant = new Assistant({ apiKey: FAKE_KEY, context: () => context(), createClient: fakeClient({ error: cases[0]![0] }, newCalls()) });
+  await assert.rejects(assistant.chat([{ role: 'user', content: 'x' }], () => {}), ApiError);
 });
 
 // --- HTTP / SSE through the real local server ---------------------------------------
 
-async function harness(script: FakeScript) {
-  const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-assistant-')), storage = new AppStorage(dir), app = new Application(storage);
-  const calls = { params: null as unknown, keys: [] as string[] };
-  // Swap in a fake-client assistant wired to the same secret store and context as the app.
-  (app as { assistant: Assistant }).assistant = new Assistant({ loadApiKey: () => storage.loadAnthropicApiKey(), context: () => app.assistantContext(), createClient: fakeClient(script, calls) });
+async function harness(script: FakeScript, key: string | null = FAKE_KEY) {
+  const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-assistant-')), storage = new AppStorage(dir);
+  const app = new Application(storage, { geminiApiKey: key });
+  const calls = newCalls();
+  // Swap in a fake-client assistant with the same key and context as the app.
+  (app as { assistant: Assistant }).assistant = new Assistant({ apiKey: key, context: () => app.assistantContext(), createClient: fakeClient(script, calls) });
   const root = join(dir, 'public'); mkdirSync(root); writeFileSync(join(root, 'index.html'), '<!doctype html><title>t</title>');
   const server = createAppServer(app, { root }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -245,24 +256,29 @@ function parseSse(text: string) {
 }
 const ask = { messages: [{ role: 'user', content: 'What is my most urgent assignment?' }] };
 
-test('SSE route: unconfigured, saving a key, streaming, and the key never leaks', async () => {
+test('SSE route: unconfigured host gives a clear error and never calls upstream', async () => {
+  const h = await harness({ deltas: ['x'] }, null);
+  try {
+    const r = await h.chat(ask);
+    assert.equal(r.status, 400);
+    assert.match((await r.json() as { error: string }).error, /GEMINI_API_KEY/);
+    assert.equal(h.calls.keys.length, 0);
+    const state = await (await fetch(`${h.url}/api/state`)).json() as { assistant: { configured: boolean } };
+    assert.equal(state.assistant.configured, false);
+  } finally { await h.close(); }
+});
+
+test('SSE route: streams with the app key, which never leaks', async () => {
   const h = await harness({ deltas: ['Your **CHEM lab** ', 'is due tomorrow.'] });
   try {
-    let r = await h.chat(ask);
-    assert.equal(r.status, 400);
-    assert.match((await r.json() as { error: string }).error, /Claude API key in Settings/);
-    assert.equal(h.calls.keys.length, 0);
-
-    r = await fetch(`${h.url}/api/settings/assistant`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Lil-Deadline': '1' }, body: JSON.stringify({ token: FAKE_KEY }) });
-    assert.equal(r.status, 200);
-    const afterSave = await r.text();
-    assert.ok(!afterSave.includes(FAKE_KEY), 'snapshot must not contain the key');
-    const state = JSON.parse(afterSave);
-    assert.equal(state.secrets.anthropicApiKeySet, true);
+    const stateText = await (await fetch(`${h.url}/api/state`)).text();
+    assert.ok(!stateText.includes(FAKE_KEY), 'snapshot must not contain the key');
+    const state = JSON.parse(stateText);
     assert.equal(state.assistant.configured, true);
+    assert.equal(state.assistant.model, DEFAULT_ASSISTANT_MODEL);
     assert.ok(state.assistant.suggestions.length >= 6);
 
-    r = await h.chat(ask);
+    const r = await h.chat(ask);
     assert.equal(r.status, 200);
     assert.match(r.headers.get('content-type') ?? '', /text\/event-stream/);
     const body = await r.text();
@@ -270,25 +286,20 @@ test('SSE route: unconfigured, saving a key, streaming, and the key never leaks'
     const events = parseSse(body);
     assert.deepEqual(events.map(e => e.event), ['open', 'delta', 'delta', 'done']);
     assert.equal(events.filter(e => e.event === 'delta').map(e => e.data.text).join(''), 'Your **CHEM lab** is due tomorrow.');
-    assert.deepEqual(events.at(-1)!.data, { stopReason: 'end_turn', note: null });
+    assert.deepEqual(events.at(-1)!.data, { stopReason: 'STOP', note: null });
     assert.deepEqual(h.calls.keys, [FAKE_KEY]);
     // The model saw the app's real task data (mock starter tasks) in the latest turn.
-    const params = h.calls.params as { messages: { content: { text: string }[] }[] };
-    assert.match(params.messages.at(-1)!.content[0]!.text, /\[Local\]/);
-
-    const stateText = await (await fetch(`${h.url}/api/state`)).text();
-    assert.ok(!stateText.includes(FAKE_KEY));
-
-    // Clearing the key returns the route to the unconfigured error.
-    await fetch(`${h.url}/api/settings/assistant`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Lil-Deadline': '1' }, body: JSON.stringify({ clearToken: true }) });
-    assert.equal((await h.chat(ask)).status, 400);
+    const contents = h.calls.params!.contents as { parts: { text: string }[] }[];
+    assert.match(contents.at(-1)!.parts[0]!.text, /\[Local\]/);
+    // The per-user key route is gone: users are never asked for a key.
+    const gone = await fetch(`${h.url}/api/settings/assistant`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Lil-Deadline': '1' }, body: JSON.stringify({ token: 'x'.repeat(20) }) });
+    assert.equal(gone.status, 400);
   } finally { await h.close(); }
 });
 
 test('SSE route: rejects cross-origin, missing header, wrong content type and bad input', async () => {
   const h = await harness({ deltas: ['x'] });
   try {
-    h.storage.saveAnthropicApiKey(FAKE_KEY);
     assert.equal((await h.chat(ask, { Origin: 'https://evil.example' })).status, 403);
     assert.equal((await h.chat(ask, { 'Sec-Fetch-Site': 'cross-site' })).status, 403);
     assert.equal((await fetch(`${h.url}/api/assistant/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ask) })).status, 403);
@@ -304,27 +315,24 @@ test('SSE route: rejects cross-origin, missing header, wrong content type and ba
   } finally { await h.close(); }
 });
 
-test('SSE route: upstream errors become an error event; refusals a done note', async () => {
-  let h = await harness({ error: new Anthropic.AuthenticationError(401, {}, 'invalid x-api-key', new Headers()) });
+test('SSE route: upstream errors become an error event; blocked answers a done note', async () => {
+  let h = await harness({ error: new ApiError({ status: 400, message: 'API key not valid. Please pass a valid API key.' }) });
   try {
-    h.storage.saveAnthropicApiKey(FAKE_KEY);
     const events = parseSse(await (await h.chat(ask)).text());
     assert.deepEqual(events.map(e => e.event), ['open', 'error']);
-    assert.match(String(events[1]!.data.message), /API key was rejected/);
+    assert.match(String(events[1]!.data.message), /key was rejected/);
   } finally { await h.close(); }
-  h = await harness({ deltas: [], stopReason: 'refusal' });
+  h = await harness({ deltas: [], finishReason: 'SAFETY' });
   try {
-    h.storage.saveAnthropicApiKey(FAKE_KEY);
     const events = parseSse(await (await h.chat(ask)).text());
     assert.equal(events.at(-1)!.event, 'done');
-    assert.equal(events.at(-1)!.data.stopReason, 'refusal');
+    assert.equal(events.at(-1)!.data.stopReason, 'SAFETY');
   } finally { await h.close(); }
 });
 
 test('SSE route: a long answer outlives requestTimeout; client disconnect aborts upstream', async () => {
   const h = await harness({ deltas: ['slow answer'], delayMs: 1500 });
   try {
-    h.storage.saveAnthropicApiKey(FAKE_KEY);
     h.server.requestTimeout = 500; // far shorter than the answer; must not cut the stream
     const events = parseSse(await (await h.chat(ask)).text());
     assert.deepEqual(events.map(e => e.event), ['open', 'delta', 'done']);
@@ -332,42 +340,30 @@ test('SSE route: a long answer outlives requestTimeout; client disconnect aborts
 
   const hang = await harness({ hang: true });
   try {
-    hang.storage.saveAnthropicApiKey(FAKE_KEY);
-    let upstreamAborted = false;
-    const real = hang.app.assistant.chat.bind(hang.app.assistant);
-    hang.app.assistant.chat = async (turns, onText, signal) => {
-      signal?.addEventListener('abort', () => { upstreamAborted = true; });
-      return real(turns, onText, signal);
-    };
     const controller = new AbortController();
     const response = await hang.chat(ask, {}, controller.signal);
     const reader = response.body!.getReader();
     await reader.read(); // "open" event
     controller.abort();
+    const upstreamAborted = () => hang.calls.params?.config?.abortSignal?.aborted === true;
     const deadline = Date.now() + 3000;
-    while (!upstreamAborted && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
-    assert.equal(upstreamAborted, true);
+    while (!upstreamAborted() && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+    assert.equal(upstreamAborted(), true);
   } finally { await hang.close(); }
 });
 
-test('app-wide key from .env: used for everyone, preferred over Settings, never exposed', async () => {
+test('app-wide key and model from .env: validated, warnings never contain key material', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-appkey-'));
   const storage = new AppStorage(dir);
-  const app = new Application(storage, { anthropicApiKey: `  ${FAKE_KEY}  ` });
+  const app = new Application(storage, { geminiApiKey: `  ${FAKE_KEY}  `, geminiModel: 'gemini-3.5-flash-lite' });
   try {
-    assert.deepEqual([app.assistant.status().configured, app.assistant.status().keySource], [true, 'app']);
-    storage.saveAnthropicApiKey('sk-ant-test-SETTINGSKEY-9876543210');
-    assert.equal(app.assistant.status().keySource, 'app');
-    const snapshot = JSON.stringify(app.snapshot());
-    assert.ok(!snapshot.includes(FAKE_KEY) && !snapshot.includes('SETTINGSKEY'));
+    assert.deepEqual([app.assistant.status().configured, app.assistant.status().model], [true, 'gemini-3.5-flash-lite']);
+    assert.ok(!JSON.stringify(app.snapshot()).includes(FAKE_KEY));
   } finally { await app.dispose(); }
-  // An invalid app key is ignored (with a warning that contains no key material); Settings is the fallback.
-  const fallback = new Application(storage, { anthropicApiKey: 'bad key with spaces' });
+  const bad = new Application(storage, { geminiApiKey: 'bad key with spaces', geminiModel: 'not a model!' });
   try {
-    assert.equal(fallback.assistant.status().keySource, 'settings');
-    assert.ok(storage.warnings.some(w => w.includes('ANTHROPIC_API_KEY')) && !storage.warnings.some(w => w.includes('bad key')));
-  } finally { await fallback.dispose(); rmSync(dir, { recursive: true, force: true }); }
-  const none = new Application(new AppStorage(mkdtempSync(join(tmpdir(), 'lil-deadline-nokey-'))));
-  try { assert.deepEqual([none.assistant.status().configured, none.assistant.status().keySource], [false, null]); }
-  finally { await none.dispose(); rmSync(none.storage.dir, { recursive: true, force: true }); }
+    assert.deepEqual([bad.assistant.status().configured, bad.assistant.status().model], [false, DEFAULT_ASSISTANT_MODEL]);
+    assert.ok(storage.warnings.some(w => w.includes('GEMINI_API_KEY')) && storage.warnings.some(w => w.includes('GEMINI_MODEL')));
+    assert.ok(!storage.warnings.some(w => w.includes('bad key')));
+  } finally { await bad.dispose(); rmSync(dir, { recursive: true, force: true }); }
 });

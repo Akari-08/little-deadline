@@ -57,13 +57,19 @@ export class Application {
   private tick: ReturnType<typeof setInterval>;
   private spotifyTick: ReturnType<typeof setInterval>;
   private notificationTick: ReturnType<typeof setInterval>;
-  /** App-wide Claude key from the host environment (.env), shared by every user of this host. */
-  private readonly appAnthropicKey: string | null;
-  constructor(storage = new AppStorage(), options: { anthropicApiKey?: string | null } = {}) {
+  /**
+   * @param options.geminiApiKey App-wide Gemini key from the host environment (.env), shared by
+   *   every user of this host — users never enter their own.
+   * @param options.geminiModel Optional model override (GEMINI_MODEL).
+   */
+  constructor(storage = new AppStorage(), options: { geminiApiKey?: string | null; geminiModel?: string | null } = {}) {
     this.storage = storage;
-    const appKey = options.anthropicApiKey?.trim() ?? '';
-    this.appAnthropicKey = appKey && !checkApiCredential(appKey, 'ANTHROPIC_API_KEY') ? appKey : null;
-    if (appKey && !this.appAnthropicKey) storage.warnings.push('ANTHROPIC_API_KEY in .env is not a valid key; Ask Sprout will use a key saved in Settings instead.');
+    const rawKey = options.geminiApiKey?.trim() ?? '';
+    const geminiKey = rawKey && !checkApiCredential(rawKey, 'GEMINI_API_KEY') ? rawKey : null;
+    if (rawKey && !geminiKey) storage.warnings.push('GEMINI_API_KEY in .env is not a valid key; Ask Sprout is disabled until it is fixed.');
+    const rawModel = options.geminiModel?.trim() ?? '';
+    const geminiModel = /^[a-z0-9][a-z0-9.\-]{1,80}$/i.test(rawModel) ? rawModel : undefined;
+    if (rawModel && !geminiModel) storage.warnings.push('GEMINI_MODEL in .env is not a valid model name; using the default model.');
     this.companion = normalizeCompanion(storage.loadCompanion());
     this.tasks = new TaskStore({ persistence: { load: () => storage.loadTasksFile(), save: value => storage.saveTasksFile(value) } });
     this.tasks.on('completed', ({ ids }) => { celebrate(this.companion, Date.now(), ids.length * 10); this.save(); });
@@ -86,10 +92,8 @@ export class Application {
     this.canvasSync.on('status', () => this.refreshNotifications()); this.notionSync.on('status', () => this.refreshNotifications());
     this.notificationTick = setInterval(() => this.refreshNotifications(), 30_000);
     this.refreshNotifications();
-    // [assistant] Claude-backed study assistant; API key stays in the host secret store.
-    // The app-wide key wins, so users never need their own; a Settings key is only a fallback.
-    this.assistant = new Assistant({ loadApiKey: () => this.appAnthropicKey ?? storage.loadAnthropicApiKey(), context: () => this.assistantContext(),
-      keySource: () => this.appAnthropicKey ? 'app' : 'settings' });
+    // [assistant] Gemini-backed study assistant; the app-wide key stays in host memory only.
+    this.assistant = new Assistant({ apiKey: geminiKey, model: geminiModel, context: () => this.assistantContext() });
     this.canvasSync.start(); this.notionSync.start();
     this.tick = setInterval(() => { if (settleTimer(this.companion, Date.now())) { this.save(); this.refreshNotifications(); } }, 500);
     this.spotifyTick = setInterval(() => { if (this.spotify.status().connected) void this.spotify.refreshPlayback(); }, 10_000);
@@ -215,10 +219,6 @@ export class Application {
     else if (path.startsWith('/api/notifications/')) {
       try { this.notifications.action(path.slice('/api/notifications/'.length), body); }
       catch (error) { throw new InputError(error instanceof Error ? error.message : 'Notification change failed.'); }
-    } else if (path === '/api/settings/assistant') {
-      const key = string(body.token).trim();
-      if (key) { const error = checkApiCredential(key, 'Claude API key'); if (error) throw new InputError(error); this.storage.saveAnthropicApiKey(key); }
-      if (body.clearToken === true) this.storage.saveAnthropicApiKey(null);
     }
     else if (path === '/api/sync/canvas') await this.canvasSync.refreshNow();
     else if (path === '/api/sync/notion') await this.notionSync.refreshNow();

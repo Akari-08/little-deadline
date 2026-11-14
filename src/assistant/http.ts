@@ -2,12 +2,12 @@
  * POST /api/assistant/chat → text/event-stream.
  *
  * Events (each `data:` is one JSON object):
- *   event: open   data: {}                            stream accepted; Claude is thinking
+ *   event: open   data: {}                            stream accepted; Gemini is thinking
  *   event: delta  data: {"text": "..."}               streamed answer text
  *   event: done   data: {"stopReason": "...", "note": "..."|null}
  *   event: error  data: {"message": "..."}            failure after the stream opened
  * Validation errors and a missing API key are reported before streaming as JSON
- * {"error": "..."} with HTTP 400. The upstream Claude request is aborted when the client
+ * {"error": "..."} with HTTP 400. The upstream Gemini request is aborted when the client
  * disconnects. A comment heartbeat keeps the connection alive during long thinking pauses.
  */
 import type { ServerResponse } from 'node:http';
@@ -23,7 +23,7 @@ export async function serveAssistantChat(assistant: Assistant, body: unknown, re
   const messages = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>).messages : undefined;
   try { validateChatMessages(messages); }
   catch (error) { jsonError(res, describeAssistantError(error)); return; }
-  if (!assistant.status().configured) { jsonError(res, 'Add your Claude API key in Settings to use the assistant.'); return; }
+  if (!assistant.status().configured) { jsonError(res, 'Ask Sprout isn’t set up on this computer yet: add GEMINI_API_KEY to the app’s .env file and restart.'); return; }
 
   const controller = new AbortController();
   res.on('close', () => { if (!res.writableFinished) controller.abort(); });
