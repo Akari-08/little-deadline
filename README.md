@@ -71,9 +71,11 @@ those assets plus the local Node backend. Keep the Node host running: uploading
 only `dist/` to public static hosting cannot connect to the device on your LAN.
 Fonts are bundled; preview mode needs no cloud service or Internet connection.
 
-Optional: copy [.env.example](.env.example) to `.env` and set
-`LIL_DEADLINE_PORT` or `TASKPET_DATA_DIR`. Keep credentials in the app's masked
-Settings fields, not in `.env`, command arguments, or public build variables.
+Copy [.env.example](.env.example) to `.env` (gitignored) and set
+`ANTHROPIC_API_KEY` for Ask Sprout; optionally `LIL_DEADLINE_PORT` or
+`TASKPET_DATA_DIR`. All other credentials (device, Canvas, Notion, Spotify) go in
+the app's masked Settings fields, not in `.env`, command arguments, or public
+build variables.
 
 ### Everyday use
 
@@ -174,10 +176,10 @@ data source UUID plus connection token. It reads the title property and optional
 ID is distinct from a database ID. Refreshes occur about every 15 minutes, and
 failures retain the last good snapshot. See [Notion details](docs/notion.md).
 
-**Ask Sprout (Claude study assistant):** open **Settings → Ask Sprout**, paste a
-Claude API key from [console.anthropic.com](https://console.anthropic.com/) and
-save it. The key is stored only in the host's private `secrets.json`; the
-browser only learns whether a key is saved. Then open **Ask Sprout** in the
+**Ask Sprout (Claude study assistant):** users need no key of their own. Put
+the app's Claude API key in a local `.env` file as `ANTHROPIC_API_KEY=...` (copy
+[.env.example](.env.example); `.env` is gitignored). The host reads it at
+startup and never sends it to the browser. Then open **Ask Sprout** in the
 sidebar and type a question, or pick a suggested one such as *"What's my most
 urgent assignment right now?"* Each question is sent to Anthropic's API along
 with your task list from every provider (local, Canvas LMS, Notion), so answers

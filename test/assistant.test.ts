@@ -206,7 +206,8 @@ test('missing key, abort and concurrency limits', async () => {
 test('API errors map to safe user-facing messages', async () => {
   const headers = new Headers();
   const cases: [unknown, RegExp][] = [
-    [new Anthropic.AuthenticationError(401, {}, 'invalid x-api-key', headers), /API key was rejected — update it in Settings/],
+    [new Anthropic.AuthenticationError(401, {}, 'invalid x-api-key', headers), /API key was rejected\. Check ANTHROPIC_API_KEY/],
+    [new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } }, undefined, headers), /out of credits/],
     [new Anthropic.RateLimitError(429, {}, 'rate', headers), /rate-limiting/],
     [new Anthropic.PermissionDeniedError(403, {}, 'no', headers), /not allowed/],
     [new Anthropic.NotFoundError(404, {}, 'model', headers), /not available/],
@@ -347,4 +348,26 @@ test('SSE route: a long answer outlives requestTimeout; client disconnect aborts
     while (!upstreamAborted && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
     assert.equal(upstreamAborted, true);
   } finally { await hang.close(); }
+});
+
+test('app-wide key from .env: used for everyone, preferred over Settings, never exposed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-appkey-'));
+  const storage = new AppStorage(dir);
+  const app = new Application(storage, { anthropicApiKey: `  ${FAKE_KEY}  ` });
+  try {
+    assert.deepEqual([app.assistant.status().configured, app.assistant.status().keySource], [true, 'app']);
+    storage.saveAnthropicApiKey('sk-ant-test-SETTINGSKEY-9876543210');
+    assert.equal(app.assistant.status().keySource, 'app');
+    const snapshot = JSON.stringify(app.snapshot());
+    assert.ok(!snapshot.includes(FAKE_KEY) && !snapshot.includes('SETTINGSKEY'));
+  } finally { await app.dispose(); }
+  // An invalid app key is ignored (with a warning that contains no key material); Settings is the fallback.
+  const fallback = new Application(storage, { anthropicApiKey: 'bad key with spaces' });
+  try {
+    assert.equal(fallback.assistant.status().keySource, 'settings');
+    assert.ok(storage.warnings.some(w => w.includes('ANTHROPIC_API_KEY')) && !storage.warnings.some(w => w.includes('bad key')));
+  } finally { await fallback.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  const none = new Application(new AppStorage(mkdtempSync(join(tmpdir(), 'lil-deadline-nokey-'))));
+  try { assert.deepEqual([none.assistant.status().configured, none.assistant.status().keySource], [false, null]); }
+  finally { await none.dispose(); rmSync(none.storage.dir, { recursive: true, force: true }); }
 });

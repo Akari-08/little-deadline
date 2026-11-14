@@ -8,15 +8,22 @@ sees the API key.
 
 ## Setup
 
-1. Create an API key at [console.anthropic.com](https://console.anthropic.com/).
-2. In Lil Deadline open **Settings → Ask Sprout**, paste the key into the masked
-   field and save. It is written only to the host's private `secrets.json` (see
-   the data directory in the README). It is never written to the repo, `.env`,
-   logs, URLs or the `/api/state` snapshot; the UI only receives
-   `anthropicApiKeySet: true/false`.
-3. Open **Ask Sprout** in the sidebar. Tap a suggested question or type your own.
+Users don't need their own key. The app supplies one app-wide Claude key:
 
-Use **Remove key** on the same card to delete it.
+1. Copy `.env.example` to `.env` in the repo root. `.env` is gitignored and never
+   committed.
+2. Set `ANTHROPIC_API_KEY=` to the app's key from
+   [console.anthropic.com](https://console.anthropic.com/). The account behind it
+   needs credits, because usage is billed there.
+3. Start the app (`npm run dev` / `npm start`). The host reads `.env` at startup
+   and keeps the key in memory. It never reaches the browser bundle (no `VITE_`
+   prefix, and Vite is denied access to `.env`), logs, URLs or the `/api/state`
+   snapshot. The UI only sees `assistant.keySource: "app"`.
+
+Settings → Study assistant then just shows **ready**. If `.env` has no key,
+or an invalid one, that card falls back to a masked field. A key saved there is
+stored in the host's private `secrets.json`. The app-wide key always takes
+precedence.
 
 ## What is sent to Anthropic
 
@@ -71,6 +78,9 @@ returns HTTP 400 with `{ "error": "..." }`. Otherwise the response is
 | `error` | `{ "message": "..." }`                |
 
 Disconnecting aborts the upstream request. At most two requests run at once.
+
+If the Claude account runs out of credits, chat shows "Ask Sprout is paused:
+the Claude account behind this app is out of credits" until credits are added.
 
 ## Tests
 

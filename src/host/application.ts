@@ -57,8 +57,13 @@ export class Application {
   private tick: ReturnType<typeof setInterval>;
   private spotifyTick: ReturnType<typeof setInterval>;
   private notificationTick: ReturnType<typeof setInterval>;
-  constructor(storage = new AppStorage()) {
+  /** App-wide Claude key from the host environment (.env), shared by every user of this host. */
+  private readonly appAnthropicKey: string | null;
+  constructor(storage = new AppStorage(), options: { anthropicApiKey?: string | null } = {}) {
     this.storage = storage;
+    const appKey = options.anthropicApiKey?.trim() ?? '';
+    this.appAnthropicKey = appKey && !checkApiCredential(appKey, 'ANTHROPIC_API_KEY') ? appKey : null;
+    if (appKey && !this.appAnthropicKey) storage.warnings.push('ANTHROPIC_API_KEY in .env is not a valid key; Ask Sprout will use a key saved in Settings instead.');
     this.companion = normalizeCompanion(storage.loadCompanion());
     this.tasks = new TaskStore({ persistence: { load: () => storage.loadTasksFile(), save: value => storage.saveTasksFile(value) } });
     this.tasks.on('completed', ({ ids }) => { celebrate(this.companion, Date.now(), ids.length * 10); this.save(); });
@@ -82,7 +87,9 @@ export class Application {
     this.notificationTick = setInterval(() => this.refreshNotifications(), 30_000);
     this.refreshNotifications();
     // [assistant] Claude-backed study assistant; API key stays in the host secret store.
-    this.assistant = new Assistant({ loadApiKey: () => storage.loadAnthropicApiKey(), context: () => this.assistantContext() });
+    // The app-wide key wins, so users never need their own; a Settings key is only a fallback.
+    this.assistant = new Assistant({ loadApiKey: () => this.appAnthropicKey ?? storage.loadAnthropicApiKey(), context: () => this.assistantContext(),
+      keySource: () => this.appAnthropicKey ? 'app' : 'settings' });
     this.canvasSync.start(); this.notionSync.start();
     this.tick = setInterval(() => { if (settleTimer(this.companion, Date.now())) { this.save(); this.refreshNotifications(); } }, 500);
     this.spotifyTick = setInterval(() => { if (this.spotify.status().connected) void this.spotify.refreshPlayback(); }, 10_000);

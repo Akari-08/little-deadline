@@ -26,7 +26,9 @@ export interface AssistantContext {
   environment: { temperatureC: number | null; humidityPct: number | null; source: string };
 }
 
-export interface AssistantStatus { configured: boolean; model: string; suggestions: readonly string[] }
+/** Where the active key comes from: the app-wide key in .env, or one saved in Settings. */
+export type AssistantKeySource = 'app' | 'settings' | null;
+export interface AssistantStatus { configured: boolean; keySource: AssistantKeySource; model: string; suggestions: readonly string[] }
 
 /** Bad request from the UI (validation) or a state the user must fix (no key). Safe to show. */
 export class AssistantInputError extends Error {}
@@ -72,10 +74,12 @@ export function validateChatMessages(raw: unknown): ChatTurn[] {
 export function describeAssistantError(error: unknown): string {
   if (error instanceof AssistantInputError) return error.message;
   if (error instanceof Anthropic.APIUserAbortError) return 'Stopped.';
-  if (error instanceof Anthropic.AuthenticationError) return 'Claude API key was rejected — update it in Settings.';
+  if (error instanceof Anthropic.AuthenticationError) return 'The Claude API key was rejected. Check ANTHROPIC_API_KEY in .env (or the key in Settings).';
   if (error instanceof Anthropic.PermissionDeniedError) return 'This Claude API key is not allowed to use this model. Check the key’s workspace in the Claude Console.';
   if (error instanceof Anthropic.NotFoundError) return 'The Claude model is not available to this API key.';
   if (error instanceof Anthropic.RateLimitError) return 'Claude is rate-limiting this API key. Wait a moment and try again.';
+  // The API reports an empty balance as a 400 invalid_request_error with no distinct type.
+  if (error instanceof Anthropic.BadRequestError && /credit balance/i.test(error.message)) return 'Ask Sprout is paused: the Claude account behind this app is out of credits. Add credits under Plans & Billing in the Claude Console.';
   if (error instanceof Anthropic.BadRequestError) return 'Claude could not process this request. Check your API key’s billing and limits in the Claude Console, or clear the conversation and retry.';
   if (error instanceof Anthropic.InternalServerError) return 'Claude is temporarily unavailable or overloaded. Try again shortly.';
   if (error instanceof Anthropic.APIConnectionTimeoutError) return 'Claude took too long to respond. Try again.';
@@ -116,15 +120,16 @@ export function buildRequest(turns: readonly ChatTurn[], context: AssistantConte
 }
 
 export class Assistant {
-  private readonly options: { loadApiKey: () => string | null; context: () => AssistantContext; createClient?: (apiKey: string) => Anthropic };
+  private readonly options: { loadApiKey: () => string | null; context: () => AssistantContext; createClient?: (apiKey: string) => Anthropic; keySource?: () => AssistantKeySource };
   private active = 0;
 
-  constructor(options: { loadApiKey: () => string | null; context: () => AssistantContext; createClient?: (apiKey: string) => Anthropic }) {
+  constructor(options: { loadApiKey: () => string | null; context: () => AssistantContext; createClient?: (apiKey: string) => Anthropic; keySource?: () => AssistantKeySource }) {
     this.options = options;
   }
 
   status(): AssistantStatus {
-    return { configured: !!this.options.loadApiKey(), model: ASSISTANT_MODEL, suggestions: SUGGESTED_QUESTIONS };
+    const configured = !!this.options.loadApiKey();
+    return { configured, keySource: configured ? this.options.keySource?.() ?? 'settings' : null, model: ASSISTANT_MODEL, suggestions: SUGGESTED_QUESTIONS };
   }
 
   /**

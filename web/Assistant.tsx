@@ -193,6 +193,12 @@ export function AssistantPage({ s, openSettings }: { s: AppSnapshot; openSetting
 export function AssistantSettings({ s, action }: { s: AppSnapshot; action: Action }) {
   const [message, setMessage] = useState('');
   const saved = s.secrets.anthropicApiKeySet;
+  if (s.assistant.keySource === 'app') {
+    return <section className="card settings-card"><span className="integration-logo">✦</span><span className="pill green">ready</span>
+      <h2>Study assistant (Claude)</h2><p>Ask Sprout is ready to chat — no API key needed. This app provides one.</p>
+      <p className="fineprint">The app’s Claude key is configured on the host (in its private <code>.env</code>) and never reaches the browser. Questions and your task list are sent to Anthropic to generate answers. Model: {s.assistant.model}.</p>
+    </section>;
+  }
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget, field = form.elements.namedItem('token') as HTMLInputElement;
