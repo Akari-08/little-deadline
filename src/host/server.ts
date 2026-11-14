@@ -5,6 +5,7 @@ import type { ViteDevServer } from 'vite';
 import { Application, InputError, validateLanAddress } from './application.ts';
 import { SpotifyError } from '../spotify/service.ts';
 import { serveAssistantChat } from '../assistant/http.ts';
+import { isNgrokHost } from './tunnel.ts';
 
 async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -14,12 +15,7 @@ async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
 function json(res: ServerResponse, code: number, body: unknown): void {
   res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
 }
-/** Hostname suffixes served by ngrok tunnels (subdomains only). */
-export const NGROK_HOST_SUFFIXES = ['.ngrok-free.app', '.ngrok-free.dev', '.ngrok.app', '.ngrok.dev', '.ngrok.io'];
-export function isNgrokHost(host: string): boolean {
-  const name = host.toLowerCase().replace(/:443$/, '');
-  return /^[a-z0-9.-]+$/.test(name) && NGROK_HOST_SUFFIXES.some(suffix => name.endsWith(suffix) && name.length > suffix.length);
-}
+export { NGROK_HOST_SUFFIXES, isNgrokHost } from './tunnel.ts';
 export function createAppServer(app: Application, options: { dev?: ViteDevServer; root?: string } = {}) {
   const server = createServer((req, res) => { void handle(req, res).catch(() => { if (!res.headersSent) json(res, 500, { error: 'The local host could not complete this request.' }); else res.destroy(); }); });
   server.requestTimeout = 15_000; server.headersTimeout = 10_000;

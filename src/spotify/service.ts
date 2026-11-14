@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { AppStorage } from '../host/storage.ts';
 import { SpotifyArtwork } from './artwork.ts';
+import { isNgrokHost } from '../host/tunnel.ts';
 
 export const SPOTIFY_SCOPES = 'user-read-playback-state user-modify-playback-state';
 export const SPOTIFY_CALLBACK_PATH = '/api/spotify/callback';
@@ -45,7 +46,10 @@ export class SpotifyService {
   authorizeUrl(origin: string): string {
     const clientId = this.storage.loadSettings().spotify.clientId;
     if (!clientId) throw new SpotifyError('Save your Spotify Client ID first.');
-    if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) throw new SpotifyError('Open Lil Deadline at its 127.0.0.1 address.');
+    // Spotify allows plain http only for loopback IPs; anything else must be https (the ngrok tunnel).
+    const loopback = /^http:\/\/127\.0\.0\.1:\d+$/.test(origin);
+    const tunnel = origin.startsWith('https://') && isNgrokHost(origin.slice('https://'.length));
+    if (!loopback && !tunnel) throw new SpotifyError('Open Lil Deadline at its 127.0.0.1 address or your ngrok https URL.');
     const verifier = randomBytes(48).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
     const state = randomBytes(24).toString('base64url');
