@@ -28,7 +28,7 @@ display continue to work without them.
 
 The **Music** display slide shows the current song's album cover above its title
 and artist, in both the browser preview and the mirrored ESP32 frame. Select it
-with the display's previous/next slide buttons or the two-finger gesture. Covers
+with the display's previous/next slide buttons or a single-finger pointing gesture. Covers
 update with the existing playback refresh (normally within 10 seconds), and
 remain visible while paused. Missing or failed artwork shows a music note.
 
@@ -49,9 +49,11 @@ the ESP32 live feed and runs on your computer. The preview and detector share
 one authenticated connection; neither opens the computer webcam. Stopping
 gestures releases its subscription, while an open preview can continue.
 
-Two fingers pointing left/right change display slides, a fist toggles playback,
+Point one index finger right for the next display screen or left for the previous
+screen. Close your fist to toggle playback;
 a rotated open hand skips tracks, a pointing-finger circle adjusts volume, and
-a wave greets Sprout. Directions follow the unmirrored camera preview. Hold
+a wave greets Sprout. Choose **Camera → Finger points** to see finger joints and
+the complete gesture guide. Directions follow the unmirrored camera preview. Hold
 poses briefly (two frames); move circles and waves slowly enough for the
 camera's target 5 fps. Navigation and greeting work without Spotify.
 

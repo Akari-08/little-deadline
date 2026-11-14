@@ -2,7 +2,6 @@ import math
 import unittest
 
 from emotion_smoothing import EmotionSmoother
-from emotion_recognition import EmotionRecognition
 from hand_gestures import GestureInterpreter, Landmark, classify_gesture
 from interaction import PresenceAndEmotion
 from music_control import RecordingMusicController
@@ -79,7 +78,7 @@ class GestureTests(unittest.TestCase):
         )
         self.assertEqual(
             classify_gesture(sideways_index()).name,
-            "index_pointing",
+            "point_right",
         )
         self.assertEqual(classify_gesture(open_hand()).name, "open_hand")
         self.assertEqual(
@@ -226,6 +225,7 @@ class GestureTests(unittest.TestCase):
 
 class InteractionTests(unittest.TestCase):
     def test_emotion_model_aliases_sadness(self):
+        from emotion_recognition import EmotionRecognition
         self.assertEqual(
             EmotionRecognition._EMOTION_ALIASES["sadness"],
             "sad",

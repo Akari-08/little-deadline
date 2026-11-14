@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import BinaryIO
 
-from hand_gestures import GestureInterpreter, Landmark
+from hand_gestures import GestureInterpreter, Landmark, classify_gesture
 
 MODEL = Path(__file__).parent / "models" / "hand_landmarker.task"
 MAX_FRAME_BYTES = 512 * 1024
@@ -92,12 +92,15 @@ def run() -> None:
             image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             result = detector.detect_for_video(image, timestamp)
             event = None
+            tracking = {"pose": None, "landmarks": []}
             if result.hand_landmarks:
                 points = [Landmark(p.x, p.y, p.z) for p in result.hand_landmarks[0]]
+                tracking = {"pose": classify_gesture(points).name,
+                            "landmarks": [[round(p.x, 4), round(p.y, 4)] for p in points]}
                 event = interpreter.update(points, timestamp / 1000)
             else:
                 interpreter.reset_tracking()
-            emit("frame_processed", timestamp=timestamp, width=width, height=height)
+            emit("frame_processed", timestamp=timestamp, width=width, height=height, tracking=tracking)
             if event and event.action in ("music_toggle", "music_next", "music_previous", "volume_change", "greet", "slide_next", "slide_previous"):
                 emit("gesture", action=event.action, value=event.value)
 

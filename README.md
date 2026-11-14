@@ -148,8 +148,8 @@ occurs in a Spotify app or device, not in the 240×320 preview. See
 
 **CV display and music gestures:** Click **Start gestures** on the music card
 or Camera page. This processes the **ESP32 camera live feed** locally. Preview
-and gestures share one stream; stop each independently. Two fingers left/right
-change slides, fist toggles playback, a rotated open hand skips, a pointing-finger
+and gestures share one stream; stop each independently. Point one index finger left/right to
+change display screens, a closed fist toggles playback, a rotated open hand skips, a raised pointing-finger
 circle adjusts volume, and a wave greets Sprout. Slide navigation and greeting
 work without Spotify.
 

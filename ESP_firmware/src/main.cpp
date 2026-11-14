@@ -46,7 +46,7 @@ constexpr int TFT_MOSI=13, TFT_SCLK=14, TFT_CS=15, TFT_DC=2, TFT_RST=-1, TFT_BL=
 // Both external sensors now SHARE SDA32/SCL33. Camera has its own SCCB bus.
 constexpr int SENSOR_SDA=32, SENSOR_SCL=33, BUTTON_PIN=-1;
 constexpr bool BUTTON_ENABLED=false, BACKLIGHT_ACTIVE_HIGH=true;
-constexpr uint8_t DISPLAY_ROTATION=0; // Portrait only: 0 or 2.
+constexpr uint8_t DISPLAY_ROTATION=2; // Portrait only: 0 or 2.
 constexpr bool DISPLAY_INVERT=true;
 constexpr uint32_t TFT_SPI_HZ=20000000;
 constexpr size_t WIDTH=240, HEIGHT=320, FRAME_BYTES=WIDTH*HEIGHT*2;

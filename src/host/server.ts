@@ -54,6 +54,15 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
           'Cross-Origin-Resource-Policy': 'same-origin' }).end(image.bytes);
         return;
       }
+      if (req.method === 'GET' && url.pathname === '/api/cv/preview') {
+        const frame = app.cvMusic.preview();
+        if (!frame) { res.writeHead(204).end(); return; }
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': frame.jpeg.length,
+          'Cross-Origin-Resource-Policy': 'same-origin',
+          'X-Gesture-Frame': JSON.stringify({ timestamp: frame.timestamp, width: frame.width, height: frame.height, tracking: frame.tracking }),
+        }).end(frame.jpeg);
+        return;
+      }
       if (req.method === 'GET' && url.pathname === '/api/camera/stream') {
         try { await validateLanAddress(app.storage.loadSettings().device.address); }
         catch { json(res, 503, { error: 'Configure a reachable LAN camera first.' }); return; }

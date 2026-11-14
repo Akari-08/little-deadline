@@ -6,6 +6,7 @@ import { mood, remainingTime } from '../src/pet/state.ts';
 import { renderFace, quantizeSurface } from '../src/render/face.ts';
 import { DISPLAY_SLIDES, DISPLAY_SLIDE_LABELS } from '../src/pet/slides.ts';
 import { CanvasImageLoader } from './canvas-image.ts';
+import { Camera } from './Camera.tsx';
 import { NotificationBell, NotificationSettings } from './Notifications.tsx';
 import { AssistantPage, AssistantSettings } from './Assistant.tsx';
 
@@ -132,7 +133,7 @@ function Music({ s, action, openSettings }: { s: AppSnapshot; action: Action; op
     <div className="music-buttons"><button aria-label="Previous track" disabled={!enabled} onClick={() => control('previous')}>⏮</button><button className="music-play" aria-label={player.playback === 'playing' ? 'Pause music' : 'Play music'} disabled={!enabled} onClick={() => control('toggle')}>{player.playback === 'playing' ? 'Ⅱ' : '▶'}</button><button aria-label="Next track" disabled={!enabled} onClick={() => control('next')}>⏭</button><button aria-label="Volume down" disabled={!enabled || player.volume == null} onClick={() => control('volume', Math.max(0, (player.volume ?? 0) - 5))}>−</button><span className="music-volume">{player.volume == null ? '—' : `${Math.round(player.volume)}%`}</span><button aria-label="Volume up" disabled={!enabled || player.volume == null} onClick={() => control('volume', Math.min(100, (player.volume ?? 0) + 5))}>+</button></div>
     {!enabled && <button className="text-button" onClick={openSettings}>Set up Spotify →</button>}
     {player.message && <p className="inline-note">{player.message}</p>}
-    <div className="music-cv"><div><strong>Hand gestures · ESP32 camera</strong><span>Two fingers left/right: display slides · fist: play/pause · rotate: skip · circle: volume · wave: greet</span></div><button className="secondary" onClick={() => void action(cv.phase === 'live' || cv.phase === 'starting' ? '/api/cv/stop' : '/api/cv/start')}>{cv.phase === 'live' || cv.phase === 'starting' ? 'Stop gestures' : 'Start gestures'}</button></div>
+    <div className="music-cv"><div><strong>Hand gestures · ESP32 camera</strong><span>Point one finger left/right: display screens · fist: play/pause · rotate: skip · circle: volume · wave: greet</span></div><button className="secondary" onClick={() => void action(cv.phase === 'live' || cv.phase === 'starting' ? '/api/cv/stop' : '/api/cv/start')}>{cv.phase === 'live' || cv.phase === 'starting' ? 'Stop gestures' : 'Start gestures'}</button></div>
     <p className="fineprint">{cv.message}{cv.lastGesture && ` Last: ${cv.lastGesture.replace(/_/g, ' ')}.`} ESP32 frames are processed locally without recording.</p>
   </section>;
 }
@@ -165,29 +166,6 @@ function Settings({ s, action }: { s: AppSnapshot; action: Action }) {
     <section className="card settings-card"><Icon name="leaf"/><h2>A fresh little start</h2><p>Reset the Mock provider to four demo tasks. Canvas and Notion snapshots are retained.</p><button className="secondary" onClick={() => void action('/api/tasks/reset')}>Restore demo tasks</button><p className="fineprint">Mouse controls are available throughout. Press H to greet Sprout, ← / → to play, and Space to start or pause focus. Shortcuts stay inactive while typing.</p></section>
     {message && <p role="status">{message}</p>}
   </div>;
-}
-function Camera({ s, action }: { s: AppSnapshot; action: Action }) {
-  const [viewing, setViewing] = useState(false), [attempt, setAttempt] = useState(0), [failed, setFailed] = useState(false);
-  const configured = !!s.settings.device.address && s.secrets.deviceTokenSet;
-  const gesturesOn = s.cvMusic.phase === 'live' || s.cvMusic.phase === 'starting';
-  const resolution = s.camera.width && s.camera.height ? `${s.camera.width} × ${s.camera.height} native` : 'ESP32 camera';
-  return <section className="camera-card card">
-    <div className="card-top"><div><span className="eyebrow">A WINDOW TO YOUR DESK</span><h2>Companion camera</h2></div><span className="pill lilac">{resolution}</span></div>
-    <div className="camera-view">{viewing && !failed ? <>
-      <img key={attempt} src={`/api/camera/stream?view=${attempt}`} alt="Live ESP32 camera feed" onError={() => setFailed(true)}/>
-      {s.camera.phase === 'loading' && <span className="camera-loading">Opening camera…</span>}
-    </> : <div className="empty"><Icon name="camera" size={42}/><h3>{failed ? 'The camera needs a moment.' : 'Your desk, from a little closer.'}</h3><p>{failed ? s.camera.phase === 'error' ? s.camera.message : 'Could not open the camera. Check settings or close the viewer in another tab.' : 'Turn on the ESP32 camera when you’d like a look around.'}</p></div>}</div>
-    <div className="connection-actions">
-      <button className="primary" disabled={!configured} onClick={() => { setFailed(false); setAttempt(a => a + 1); setViewing(true); }}>{failed ? 'Retry camera' : viewing ? 'Reconnect camera' : 'Open camera'}</button>
-      <button className="secondary" disabled={!viewing} onClick={() => setViewing(false)}>Stop viewing</button>
-      <button className="secondary" disabled={!configured && !gesturesOn} onClick={() => void action(gesturesOn ? '/api/cv/stop' : '/api/cv/start')}>{gesturesOn ? 'Stop gestures' : 'Start gestures'}</button>
-      <span className="muted">{s.camera.message}{s.camera.phase === 'live' && s.camera.deliveredFps !== null && ` · ${s.camera.deliveredFps.toFixed(1)} fps`}</span>
-    </div>
-    <p className="fineprint">{s.cvMusic.message} Two fingers left/right: slides · fist: play/pause · rotate: skip · circle: volume · wave: greet.</p>
-    <p className="fineprint">Preview and gestures share one ESP32 feed. Stopping the preview leaves active gestures running. Video scales smoothly to fit; the badge shows captured pixels. No recording or facial recognition.</p>
-    {s.camera.width !== null && s.camera.width < 800 && <p className="inline-note">The camera is sending {s.camera.width} × {s.camera.height}. Install the updated ESP firmware for 800 × 600 capture.</p>}
-    {!configured && <p className="inline-note">Add your device address and token in Settings to use the camera.</p>}
-  </section>;
 }
 function Diagnostics({ s }: { s: AppSnapshot }) {
   const d = s.diagnostics, st = d.stream, sensors = d.sensors;

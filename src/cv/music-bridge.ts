@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SpotifyService, SpotifyAction } from '../spotify/service.ts';
 import type { CameraProxy, CameraFrame } from '../camera/proxy.ts';
+import { EMPTY_TRACKING, parseHandTracking, type HandTracking } from './tracking.ts';
 
 export interface CvMusicStatus {
   phase: 'off' | 'starting' | 'live' | 'error'; message: string; source: 'esp-camera';
@@ -11,9 +12,10 @@ export interface CvMusicStatus {
 }
 const allowed = new Set(['music_toggle', 'music_next', 'music_previous', 'volume_change', 'greet', 'slide_next', 'slide_previous']);
 type WorkerEvent = { action: string; value: number | null } | { kind: 'ready' | 'error'; message?: string }
-  | { kind: 'frame_processed'; timestamp: number; width: number; height: number };
+  | { kind: 'frame_processed'; timestamp: number; width: number; height: number; tracking: HandTracking };
+export type GesturePreview = { jpeg: Buffer; timestamp: number; width: number; height: number; tracking: HandTracking };
 export function parseGestureLine(line: string): WorkerEvent | null {
-  if (line.length > 1024) return null;
+  if (line.length > 4096) return null;
   let raw: unknown;
   try { raw = JSON.parse(line); } catch { return null; }
   if (!raw || typeof raw !== 'object') return null;
@@ -25,7 +27,9 @@ export function parseGestureLine(line: string): WorkerEvent | null {
     if (typeof timestamp !== 'number' || !Number.isSafeInteger(timestamp) || timestamp < 0 ||
       typeof width !== 'number' || !Number.isInteger(width) || width < 1 || width > 8192 ||
       typeof height !== 'number' || !Number.isInteger(height) || height < 1 || height > 8192) return null;
-    return { kind: 'frame_processed', timestamp, width, height };
+    const tracking = data.tracking === undefined ? EMPTY_TRACKING : parseHandTracking(data.tracking);
+    if (!tracking) return null;
+    return { kind: 'frame_processed', timestamp, width, height, tracking };
   }
   if (data.kind !== 'gesture' || typeof data.action !== 'string' || !allowed.has(data.action)) return null;
   const value = data.action === 'volume_change' && typeof data.value === 'number' && Number.isFinite(data.value) && Math.abs(data.value) <= 30 ? data.value : null;
@@ -47,6 +51,8 @@ export class CvMusicBridge {
   private unsubscribe: (() => void) | null = null;
   private pending: CameraFrame | null = null;
   private inFlight: number | null = null;
+  private inFlightFrame: CameraFrame | null = null;
+  private processed: GesturePreview | null = null;
   private lastTimestamp = 0;
   private ready = false;
   private watchdog: ReturnType<typeof setTimeout> | null = null;
@@ -61,6 +67,11 @@ export class CvMusicBridge {
     this.spotify = spotify; this.onGreet = onGreet; this.onSlide = onSlide; this.camera = camera; this.spawnWorker = spawnWorker;
   }
   status(): CvMusicStatus { return { ...this.state }; }
+  preview(now = performance.now()): GesturePreview | null {
+    // Timestamp is the monotonic capture receipt time, so an old frame never
+    // appears live just because inference finally finished.
+    return this.state.phase === 'live' && this.processed && now - this.processed.timestamp < 1500 ? this.processed : null;
+  }
   start(address: string, token: string | null): void {
     if (this.child) return;
     this.state = { ...this.state, phase: 'starting', message: 'Loading hand detection for the ESP32 camera…',
@@ -73,7 +84,7 @@ export class CvMusicBridge {
       child.stdout.on('data', (chunk: string) => {
         if (this.child !== child) return;
         pending += chunk;
-        if (pending.length > 4096) { this.fail('Gesture output exceeded its limit.'); return; }
+        if (pending.length > 16_384) { this.fail('Gesture output exceeded its limit.'); return; }
         let end: number;
         while (this.child === child && (end = pending.indexOf('\n')) >= 0) {
           const event = parseGestureLine(pending.slice(0, end)); pending = pending.slice(end + 1);
@@ -86,6 +97,9 @@ export class CvMusicBridge {
             this.armWatchdog(10_000, 'No camera frame was processed. Check the ESP32 connection.'); this.sendLatest();
           } else if (event.kind === 'frame_processed') {
             if (event.timestamp !== this.inFlight) { this.fail('Gesture worker returned an unexpected frame.'); return; }
+            this.processed = this.inFlightFrame ? { jpeg: this.inFlightFrame.jpeg, timestamp: event.timestamp,
+              width: event.width, height: event.height, tracking: event.tracking } : null;
+            this.inFlightFrame = null;
             this.inFlight = null;
             this.state = { ...this.state, phase: 'live', message: this.state.phase === 'live' ? this.state.message : 'ESP32 camera gestures are active.',
               framesProcessed: this.state.framesProcessed + 1, width: event.width, height: event.height };
@@ -112,6 +126,7 @@ export class CvMusicBridge {
     if (frame.jpeg.length > 512 * 1024) { this.fail('Camera frame exceeds the gesture limit.'); return; }
     const timestamp = Math.max(this.lastTimestamp + 1, Math.floor(frame.receivedAt));
     this.lastTimestamp = timestamp; this.inFlight = timestamp;
+    this.inFlightFrame = frame;
     const header = Buffer.alloc(12); header.writeUInt32LE(frame.jpeg.length); header.writeBigUInt64LE(BigInt(timestamp), 4);
     // One outstanding packet; the next frame waits for the Python acknowledgement.
     this.child.stdin.write(Buffer.concat([header, frame.jpeg]));
@@ -121,7 +136,7 @@ export class CvMusicBridge {
   private stopProcess(): void {
     const child = this.child; this.child = null;
     this.unsubscribe?.(); this.unsubscribe = null;
-    this.pending = null; this.inFlight = null; this.ready = false;
+    this.pending = null; this.inFlight = null; this.inFlightFrame = null; this.processed = null; this.ready = false;
     if (this.watchdog) clearTimeout(this.watchdog); this.watchdog = null;
     child?.stdin.destroy(); child?.kill();
   }

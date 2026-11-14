@@ -41,6 +41,24 @@ async function browserRequest(url: string, options: RequestOptions = {}) {
 }
 const navigationHeaders = { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' };
 
+test('gesture preview serves only the current frame with matching metadata and same-origin protection', async () => {
+  const h = await harness();
+  try {
+    assert.equal((await fetch(h.url + '/api/cv/preview')).status, 204);
+    assert.equal(h.app.camera.status().phase, 'off');
+    const jpeg = Buffer.from([255,216,1,255,217]), tracking = { pose: null, landmarks: [] };
+    h.app.cvMusic.preview = () => ({ jpeg, timestamp: 200, width: 800, height: 600, tracking });
+    const response = await fetch(h.url + '/api/cv/preview');
+    assert.equal(response.status, 200); assert.equal(response.headers.get('content-type'), 'image/jpeg');
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), jpeg);
+    assert.deepEqual(JSON.parse(response.headers.get('x-gesture-frame')!), { timestamp: 200, width: 800, height: 600, tracking });
+    assert.equal((await fetch(h.url + '/api/cv/preview', { headers: { Origin: 'https://untrusted.example' } })).status, 403);
+    h.app.cvMusic.preview = () => null;
+    assert.equal((await fetch(h.url + '/api/cv/preview')).status, 204);
+  } finally { await h.close(); }
+});
+
 test('Spotify routes expose only the authorization URL and reject an unmatched callback', async () => {
   const h = await harness();
   try {

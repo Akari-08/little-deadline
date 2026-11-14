@@ -17,7 +17,7 @@ function harness() {
     { subscribe: (_address, _token, value) => { consumer = value; return () => { released++; }; } },
     () => process as unknown as ChildProcessWithoutNullStreams);
   return { bridge, packets, emit: (event: unknown) => process.stdout.write(JSON.stringify(event) + '\n'),
-    frame: (n: number) => consumer!.onFrame({ jpeg: Buffer.from([255,216,n,255,217]), receivedAt: n * 200 }),
+    frame: (n: number, receivedAt = n * 200) => consumer!.onFrame({ jpeg: Buffer.from([255,216,n,255,217]), receivedAt }),
     error: () => consumer!.onError('Camera disconnected.', 503),
     counts: () => ({ released, killed, greeted, slides }) };
 }
@@ -67,4 +67,42 @@ test('frame acknowledgements require bounded integer timestamps and dimensions',
   for (const fields of [{ timestamp: -1, width: 800, height: 600 }, { timestamp: 10, width: 9000, height: 600 }, { timestamp: 10, width: 800, height: 0 }]) {
     assert.equal(parseGestureLine(JSON.stringify({ kind: 'frame_processed', ...fields })), null);
   }
+});
+
+test('finger preview matches landmarks to the processed JPEG, then clears on no hand, stop and failure', () => {
+  const h = harness();
+  try {
+    h.bridge.start('ws://192.168.1.123:81/', 'synthetic-device-token'); h.emit({ kind: 'ready' });
+    const timestamp = Math.floor(performance.now());
+    const tracking = { pose: 'point_right', landmarks: Array.from({ length: 21 }, (_, i) => [0.1 + i / 30, 0.5]) };
+    h.frame(1, timestamp); h.frame(2, timestamp + 1);
+    assert.equal(h.bridge.preview(), null);
+    h.emit({ kind: 'frame_processed', timestamp, width: 800, height: 600, tracking });
+    assert.equal(h.bridge.preview()!.jpeg[2], 1);
+    assert.deepEqual(h.bridge.preview()!.tracking, tracking);
+    h.emit({ kind: 'frame_processed', timestamp: timestamp + 1, width: 800, height: 600, tracking: { pose: null, landmarks: [] } });
+    assert.equal(h.bridge.preview()!.jpeg[2], 2); assert.equal(h.bridge.preview()!.tracking.landmarks.length, 0);
+    h.error(); assert.equal(h.bridge.preview(), null);
+  } finally { h.bridge.stop(); assert.equal(h.bridge.preview(), null); }
+});
+
+test('stale analyzed frames are not exposed as a live finger preview', () => {
+  const h = harness();
+  try {
+    h.bridge.start('ws://192.168.1.123:81/', 'synthetic-device-token'); h.emit({ kind: 'ready' });
+    h.frame(1, performance.now());
+    const timestamp = Number(h.packets[0]!.readBigUInt64LE(4));
+    h.emit({ kind: 'frame_processed', timestamp, width: 800, height: 600 });
+    assert.ok(h.bridge.preview(timestamp + 100));
+    assert.equal(h.bridge.preview(timestamp + 1500), null);
+  } finally { h.bridge.stop(); }
+});
+
+test('invalid or oversized hand metadata is rejected at the worker boundary', () => {
+  for (const tracking of [
+    { pose: 'point_right', landmarks: [[0.2, 0.3]] },
+    { pose: 'unknown_action', landmarks: Array(21).fill([0.2, 0.3]) },
+    { pose: 'fist', landmarks: Array(21).fill([999, 0.3]) },
+    { pose: null, landmarks: Array(21).fill([0.2, 0.3]) },
+  ]) assert.equal(parseGestureLine(JSON.stringify({ kind: 'frame_processed', timestamp: 1, width: 800, height: 600, tracking })), null);
 });

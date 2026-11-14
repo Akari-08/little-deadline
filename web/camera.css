@@ -1,0 +1,23 @@
+.camera-modes{display:flex;align-items:center;gap:16px;margin-top:22px;flex-wrap:wrap}
+.camera-modes .segmented button{font-size:12px;padding:9px 16px}
+.camera-modes>.muted{font-size:11px}
+.finger-preview{position:relative;width:100%;max-width:1280px;display:grid;place-items:center}
+.finger-preview canvas{display:block;width:100%;height:auto}
+.finger-preview-label{position:absolute;left:14px;top:14px;padding:7px 11px;border:1px solid #638ab655;border-radius:20px;color:#daecff;background:#10213dd9;font-size:11px}
+.gesture-status{display:flex;gap:28px;flex-wrap:wrap;padding:18px 20px;background:#192b42;border:1px solid #35516f;border-radius:10px;margin-top:22px}
+.gesture-status>span{display:flex;flex-direction:column;gap:7px}
+.gesture-status .eyebrow{font-size:9px;color:#9ebfe5;letter-spacing:1px}
+.gesture-status strong{font-size:12px;font-weight:500;color:#e0edff}
+.gesture-guide-heading{margin:25px 0 14px}
+.gesture-guide-heading h3{font-size:16px;color:#e1edff}
+.gesture-guide-heading p{margin-top:7px;font-size:11px;color:#a8b9cf;line-height:1.7}
+.gesture-guide{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.gesture-guide-item{display:flex;align-items:flex-start;gap:12px;padding:17px 15px;border:1px solid #35465b;border-radius:10px;background:#1b2739;transition:background .15s,border-color .15s}
+.gesture-guide-item.detected{border-color:#84c9ff;background:#254c70;box-shadow:inset 0 0 0 1px #84c9ff}
+.gesture-symbol{display:grid;place-items:center;flex:0 0 35px;height:35px;background:#2c4261;border-radius:9px;color:#aeddff;font-size:21px}
+.gesture-guide-item:first-child .gesture-symbol{font-size:13px}
+.gesture-guide-item strong{display:block;font-size:12px;font-weight:600;color:#e4efff;margin:1px 0 6px}
+.gesture-guide-item span:not(.gesture-symbol){display:block;font-size:11px;color:#b8d5f5;line-height:1.5}
+.gesture-guide-item p{font-size:10px;line-height:1.6;color:#a1b4cb;margin-top:7px}
+@media(max-width:1050px){.gesture-guide{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.gesture-guide{grid-template-columns:1fr}.gesture-status{gap:18px}.camera-modes{gap:10px}.finger-preview-label{font-size:9px;left:8px;top:8px}}

@@ -29,5 +29,7 @@ try {
   assert.equal(status.phase, 'live', status.message);
   assert.ok(status.framesProcessed >= 5);
   assert.equal(status.width, 800); assert.equal(status.height, 600); assert.equal(calls, 1);
+  assert.deepEqual(bridge.preview()?.tracking, { pose: null, landmarks: [] });
+  assert.deepEqual(bridge.preview()?.jpeg, jpeg);
   console.log('PASS: shared MJPEG parser → host stdin packets → real Python hand model → matched frame acknowledgements (800×600). No hardware used.');
 } finally { bridge.stop(); camera.stop(); }

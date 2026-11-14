@@ -106,6 +106,11 @@ def classify_gesture(landmarks: Iterable[Landmark]) -> Gesture:
         return Gesture("open_hand", 0.8, palm_angle)
 
     if extended[1] and not any(extended[2:]):
+        dx = points[8].x - points[5].x
+        dy = points[8].y - points[5].y
+        # Use the index finger's direction, not which side the hand occupies.
+        if abs(dx) >= 0.07 and abs(dx) > abs(dy) * 1.5:
+            return Gesture("point_right" if dx > 0 else "point_left", 0.85)
         return Gesture("index_pointing", 0.85)
 
     if extended[1] and extended[2] and not extended[3] and not extended[4]:
@@ -174,6 +179,7 @@ class GestureInterpreter:
         self._candidate_gesture: str | None = None
         self._candidate_frames = 0
         self._stable_gesture: str | None = None
+        self._pose_action_fired = False
         self._last_circle_angle: float | None = None
         self._last_circle_point: tuple[float, float] | None = None
         self._last_relative_circle_angle: float | None = None
@@ -184,6 +190,7 @@ class GestureInterpreter:
         self._candidate_gesture = None
         self._candidate_frames = 0
         self._stable_gesture = None
+        self._pose_action_fired = False
         self._motion_path.clear()
         self._circle_path.clear()
         self._relative_circle_path.clear()
@@ -232,6 +239,7 @@ class GestureInterpreter:
             and effective_name != self._stable_gesture
         ):
             self._stable_gesture = effective_name
+            self._pose_action_fired = False
             stable_changed = True
 
         if effective_name in {"open_hand", "rotate_left", "rotate_right"}:
@@ -256,18 +264,19 @@ class GestureInterpreter:
 
         if (
             self._stable_gesture == "fist"
-            and stable_changed
+            and not self._pose_action_fired
             and now - self._last_volume_at >= self.volume_lock_seconds
             and now - self._last_index_at >= self.volume_lock_seconds
         ):
             event = self._emit("music_toggle", now)
+            self._pose_action_fired = event is not None
         elif self._stable_gesture == "rotate_right" and stable_changed:
             event = self._emit("music_next", now)
         elif self._stable_gesture == "rotate_left" and stable_changed:
             event = self._emit("music_previous", now)
-        elif self._stable_gesture == "two_fingers_right" and stable_changed:
+        elif self._stable_gesture == "point_right" and stable_changed:
             event = self._emit("slide_next", now)
-        elif self._stable_gesture == "two_fingers_left" and stable_changed:
+        elif self._stable_gesture == "point_left" and stable_changed:
             event = self._emit("slide_previous", now)
         elif self._stable_gesture == "open_hand":
             event = self._detect_wave(now)

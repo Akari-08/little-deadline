@@ -10,7 +10,7 @@ from pathlib import Path
 
 from music_bridge import MAX_FRAME_BYTES, read_packet
 from hand_gestures import GestureInterpreter, Landmark
-from test_slide_gestures import two_fingers
+from test_slide_gestures import pointing
 
 
 class Fragmented(io.BytesIO):
@@ -34,7 +34,7 @@ class CameraBridgeTests(unittest.TestCase):
 
     def test_hand_loss_clears_pose_but_preserves_cooldown(self):
         interpreter = GestureInterpreter(stable_frames=2)
-        pose = two_fingers("right")
+        pose = pointing("right")
         self.assertIsNone(interpreter.update(pose, 0))
         self.assertEqual(interpreter.update(pose, 0.2).action, "slide_next")
         interpreter.reset_tracking()
@@ -55,7 +55,8 @@ class CameraBridgeTests(unittest.TestCase):
                                 capture_output=True, timeout=45)
         events = [json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual(result.returncode, 0, events)
-        self.assertEqual(events, [{"kind": "ready"}, {"kind": "frame_processed", "timestamp": 1000, "width": 800, "height": 600}])
+        self.assertEqual(events, [{"kind": "ready"}, {"kind": "frame_processed", "timestamp": 1000, "width": 800, "height": 600,
+                                                  "tracking": {"pose": None, "landmarks": []}}])
 
     def test_unmirrored_esp_circle_direction_at_five_fps(self):
         for direction in (1, -1):

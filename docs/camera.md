@@ -5,6 +5,27 @@ choose **Open camera** for a preview and **Start gestures** for hand control.
 The same gesture button is available on the dashboard music card. The
 computer webcam is never opened by the app's gesture bridge.
 
+Choose **Finger points** to enable gesture controls and see all 21 hand joints
+overlaid on the exact frame the detector analyzed. The guide highlights the
+recognized pose and shows the current display screen and last gesture.
+Switch back to **Live video** for the regular camera preview.
+
+- **Closed fist:** Spotify play/pause.
+- **One index finger pointing right:** next ESP display screen.
+- **One index finger pointing left:** previous ESP display screen.
+- **Open palm tilted right/left:** next/previous Spotify track.
+- **Raised index finger drawing a circle:** volume (clockwise up, reverse down).
+- **Open-hand wave:** greet Sprout.
+
+Hold a pose briefly, then relax or change poses before repeating it. Holding a
+pointing pose does not cycle continuously through screens. Fist detection
+waits briefly after a volume pose to avoid a false pause during finger movement.
+Display navigation and greeting work without a Spotify connection.
+
+The finger-point view uses the shared ESP feed and runs locally. Its current
+JPEG and bounded landmark coordinates are held only in memory. Missing hands,
+stopped detection and stale frames clear the dots; there is no landmark history.
+
 The Node host shares one authenticated `http://DEVICE:8080/stream` request
 between the preview and Python worker. It keeps device credentials in the
 host. Python receives only JPEG frames and monotonic timestamps over stdin.
@@ -82,7 +103,7 @@ the badge says 800×600 and frames continue arriving alongside display ACKs.
 npm.cmd run check
 npm.cmd run build
 Push-Location CV
-..\.venv\Scripts\python.exe -m unittest test_slide_gestures test_camera_bridge
+..\.venv\Scripts\python.exe -m unittest test_slide_gestures test_camera_bridge test_interactions.GestureTests
 Pop-Location
 node --import tsx scripts/gesture-check.ts
 ```
