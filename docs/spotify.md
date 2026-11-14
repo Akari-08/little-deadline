@@ -26,26 +26,38 @@ It does not download tracks, stream music into the browser, or send audio to
 the ESP32. Spotify and Internet access are optional; the pet, tasks, and ESP32
 display continue to work without them.
 
-## Computer-webcam gestures
+The **Music** display slide shows the current song's album cover above its title
+and artist, in both the browser preview and the mirrored ESP32 frame. Select it
+with the display's previous/next slide buttons or the two-finger gesture. Covers
+update with the existing playback refresh (normally within 10 seconds), and
+remain visible while paused. Missing or failed artwork shows a music note.
 
-Install Python 3, `opencv-python`, and `mediapipe`, then ensure
-`CV/models/hand_landmarker.task` exists. On Windows the host starts `py -3`; on
-macOS/Linux it starts `python3`. Set `LIL_DEADLINE_PYTHON` to a Python executable
-path if needed. Click **Start gestures** in the music card. The button explicitly
-starts the local webcam process; **Stop gestures** closes it. A horizontal
-two-finger pose moves between the five mirrored display slides. Slide navigation
-and greeting work without Spotify; music gestures need a linked account. The
-existing debounced CV gesture interpreter supplies fist
-(play/pause), rotated open hand (next/previous), pointing-finger circle
-(volume), and wave (greet) events. Only event names and volume deltas pass to
-the Node host. The ESP32 MJPEG camera viewer is separate and cannot currently
-be selected as the gesture camera.
+The host uses `item.album.images` from Spotify's
+[playback response](https://developer.spotify.com/documentation/web-api/reference/get-information-about-the-users-current-playback).
+It keeps just the current image in memory and serves it through a local route so
+the canvas remains readable for RGB565 uploads. Image downloads have a size
+limit and timeout, use Spotify's image CDN without OAuth headers, and never run
+on the ESP32. No additional Spotify permissions or firmware changes are needed.
+The artwork retains its aspect ratio; the RGB565 display has reduced color precision.
+The white logo in `public/spotify-logo.svg` is from Spotify's official
+[brand assets](https://developer.spotify.com/documentation/design).
 
-If controls say no active device, start playback in Spotify first. If linking
-fails, verify the port, `127.0.0.1` address, and exact Redirect URI in the
-Spotify dashboard. If gestures fail to start, check Python dependencies,
-computer webcam permissions, and whether another application is using the
-camera. The music buttons remain available without CV.
+## ESP32 camera gestures
+
+Click **Start gestures** in the music card or Camera page. Hand detection uses
+the ESP32 live feed and runs on your computer. The preview and detector share
+one authenticated connection; neither opens the computer webcam. Stopping
+gestures releases its subscription, while an open preview can continue.
+
+Two fingers pointing left/right change display slides, a fist toggles playback,
+a rotated open hand skips tracks, a pointing-finger circle adjusts volume, and
+a wave greets Sprout. Directions follow the unmirrored camera preview. Hold
+poses briefly (two frames); move circles and waves slowly enough for the
+camera's target 5 fps. Navigation and greeting work without Spotify.
+
+See [camera and gesture setup](camera.md) for Python installation, higher native
+resolution, and firmware update instructions. If controls say no active device,
+start playback in Spotify. Music buttons remain available without gestures.
 
 See Spotify's [Redirect URI rules](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri)
 and [player endpoint reference](https://developer.spotify.com/documentation/web-api/reference/start-a-users-playback).

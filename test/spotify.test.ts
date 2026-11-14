@@ -88,6 +88,45 @@ test('Spotify rejects missing devices and rate-limited playback cleanly', async 
   } finally { cleanup(); }
 });
 
+test('playback exposes a local cover URL, keeps paused art, and clears it for missing tracks or disconnect', async () => {
+  let status = 200;
+  let item: Record<string, unknown> | null = { name: 'Study song', artists: [{ name: 'Example artist' }],
+    external_urls: { spotify: 'https://open.spotify.com/track/abc123' },
+    album: { images: [{ url: 'https://i.scdn.co/image/' + 'a'.repeat(40), width: 300, height: 300 }] } };
+  const { service, storage, cleanup } = setup((async () => status === 204 ? new Response(null, { status: 204 }) : okJson({ item, is_playing: false })) as typeof fetch);
+  try {
+    storage.saveSpotifyTokens({ accessToken: 'access', refreshToken: 'refresh', expiresAt: Date.now() + 3600000 });
+    const first = await service.refreshPlayback(true);
+    assert.equal(first.playback, 'paused'); assert.match(first.artworkUrl!, /^\/api\/spotify\/artwork\?id=/);
+    assert.equal(first.trackUrl, 'https://open.spotify.com/track/abc123');
+    assert.ok(!JSON.stringify(first).includes('i.scdn.co'));
+    assert.equal((await service.refreshPlayback(true)).artworkUrl, first.artworkUrl);
+    item = { name: 'Local track', external_urls: { spotify: 'javascript:alert(1)' } };
+    const noArt = await service.refreshPlayback(true);
+    assert.equal(noArt.artworkUrl, null); assert.equal(noArt.trackUrl, null);
+    item = null; assert.equal((await service.refreshPlayback(true)).artworkUrl, null);
+    status = 204; assert.equal((await service.refreshPlayback(true)).artworkUrl, null);
+    service.disconnect(); assert.equal(service.status().artworkUrl, null);
+  } finally { cleanup(); }
+});
+
+test('a playback response arriving after disconnect cannot restore old artwork', async () => {
+  let finish!: (r: Response) => void;
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const { service, storage, cleanup } = setup((async () => {
+    started(); return new Promise<Response>(resolve => { finish = resolve; });
+  }) as typeof fetch);
+  try {
+    storage.saveSpotifyTokens({ accessToken: 'access', refreshToken: 'refresh', expiresAt: Date.now() + 3600000 });
+    const pending = service.refreshPlayback(true); await ready;
+    service.disconnect();
+    finish(okJson({ item: { name: 'Old song', album: { images: [{ url: 'https://i.scdn.co/image/' + 'a'.repeat(40) }] } } }));
+    const state = await pending;
+    assert.equal(state.connected, false); assert.equal(state.track, null); assert.equal(state.artworkUrl, null);
+  } finally { cleanup(); }
+});
+
 test('CV bridge accepts only bounded gesture events', () => {
   assert.deepEqual(parseGestureLine('{"kind":"gesture","action":"music_next"}'), { action: 'music_next', value: null });
   assert.deepEqual(parseGestureLine('{"kind":"gesture","action":"volume_change","value":-8}'), { action: 'volume_change', value: -8 });

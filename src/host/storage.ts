@@ -86,10 +86,16 @@ const isObj = (value: unknown): value is Record<string, unknown> =>
 const clampInt = (value: unknown, lo: number, hi: number, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? Math.min(hi, Math.max(lo, Math.round(value))) : fallback;
 
+/** Strip surrounding paste whitespace/formatting, preserving every character inside the token. */
+export function normalizeCanvasPersonalToken(value: string): string {
+  return value.replace(/^[\s\u200b-\u200d\u2060]+|[\s\u200b-\u200d\u2060]+$/g, '');
+}
+
 /** A credential-like string: printable ASCII, no spaces, bounded length. */
 export function checkApiCredential(value: string, label: string): string | null {
   if (value.length < 8 || value.length > 512) return `${label} must be 8–512 characters`;
-  if (!/^[\x21-\x7e]+$/.test(value)) return `${label} must be printable ASCII with no spaces`;
+  if (/\s/.test(value)) return `${label} contains spaces or line breaks. Paste only the token on one line.`;
+  if (!/^[\x21-\x7e]+$/.test(value)) return `${label} contains hidden or unsupported characters. Copy the token directly from your provider's settings.`;
   return null;
 }
 
@@ -221,6 +227,7 @@ export class AppStorage {
 
   saveCanvasPersonalToken(token: string | null): void {
     if (token !== null) {
+      token = normalizeCanvasPersonalToken(token);
       const problem = checkApiCredential(token, 'The Canvas access token');
       if (problem) throw new Error(problem);
     }

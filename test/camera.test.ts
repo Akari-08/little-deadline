@@ -3,11 +3,20 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
-import { MultipartParser } from '../src/camera/multipart.ts';
+import { MultipartParser, jpegDimensions } from '../src/camera/multipart.ts';
 import { CameraProxy } from '../src/camera/proxy.ts';
 
 const jpeg = Buffer.from([255, 216, 1, 2, 3, 4, 255, 217]);
 const part = Buffer.concat([Buffer.from(`\r\n--taskpetframe\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`), jpeg]);
+
+test('native JPEG dimensions come from baseline/progressive SOF, with bounds checking', () => {
+  for (const marker of [192, 194]) {
+    const data = Buffer.from([255,216,255,marker,0,11,8,2,88,3,32,1,1,17,0,255,217]);
+    assert.deepEqual(jpegDimensions(data), { width: 800, height: 600 });
+    assert.equal(jpegDimensions(data.subarray(0, 10)), null);
+  }
+  assert.equal(jpegDimensions(jpeg), null);
+});
 
 test('camera parser handles headers and JPEG split at every possible byte boundary', () => {
   for (let split = 1; split < part.length; split++) {
@@ -75,4 +84,47 @@ test('one upstream camera stream; a disconnected viewer cancels it and releases 
     const retry = new AbortController(), reopened = await fetch(h.url, { signal: retry.signal });
     assert.equal(reopened.status, 200); assert.equal(calls, 2); retry.abort(); await reopened.body?.cancel().catch(() => {});
   } finally { await h.close(); }
+});
+
+test('preview and gestures share one ESP connection and release it only after both stop', async () => {
+  let calls = 0, upstream: ReadableStreamDefaultController<Uint8Array> | null = null, signal: AbortSignal | null = null;
+  const h = await harness((async (_url, options) => {
+    calls++; signal = options!.signal!;
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      upstream = controller; controller.enqueue(part);
+      signal!.addEventListener('abort', () => controller.error(new Error('cancelled')), { once: true });
+    } }), { headers: { 'Content-Type': 'multipart/x-mixed-replace; boundary=taskpetframe' } });
+  }) as typeof fetch);
+  let received = 0;
+  try {
+    const off = h.proxy.subscribe('ws://192.168.1.123:81/', h.token, {
+      kind: 'gestures', onFrame: () => { received++; }, onError: message => assert.fail(message),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const viewer = new AbortController(), response = fetch(h.url, { signal: viewer.signal });
+    const until = Date.now() + 1000;
+    while (!h.proxy.status().previewConsumer && Date.now() < until) await new Promise(r => setTimeout(r, 5));
+    (upstream as ReadableStreamDefaultController<Uint8Array> | null)!.enqueue(part);
+    const r = await response; assert.equal(r.status, 200); assert.equal(calls, 1); assert.equal(received, 2);
+    viewer.abort(); await r.body?.cancel().catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal((signal as AbortSignal | null)?.aborted, false);
+    assert.equal(h.proxy.status().gestureConsumer, true);
+    (upstream as ReadableStreamDefaultController<Uint8Array> | null)!.enqueue(part);
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(received, 3);
+    off(); assert.equal((signal as AbortSignal | null)?.aborted, true);
+    assert.equal(h.proxy.status().phase, 'off');
+  } finally { await h.close(); }
+});
+
+test('camera errors stop every consumer and a retry opens a fresh stream', async () => {
+  let calls = 0, errors = 0;
+  const proxy = new CameraProxy((async () => { calls++; return new Response('', { status: 401 }); }) as typeof fetch);
+  const consumer = { kind: 'gestures' as const, onFrame: () => assert.fail('unexpected frame'), onError: () => { errors++; } };
+  proxy.subscribe('ws://192.168.1.123:81/', 'synthetic-private-device-token-12345', consumer);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(errors, 1); assert.equal(proxy.status().phase, 'error');
+  proxy.subscribe('ws://192.168.1.123:81/', 'synthetic-private-device-token-12345', consumer);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(errors, 2); assert.equal(calls, 2); proxy.stop();
 });

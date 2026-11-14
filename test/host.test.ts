@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { request } from 'node:http';
+import { request, type IncomingHttpHeaders, type RequestOptions } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Application, validateLanAddress } from '../src/host/application.ts';
@@ -14,7 +14,9 @@ import { startMockCanvas, FAKE_CANVAS_TOKEN } from './helpers/mock-canvas-server
 
 async function harness() {
   const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-host-')), storage = new AppStorage(dir), app = new Application(storage);
-  const server = createAppServer(app); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const root = join(dir, 'public'); mkdirSync(root);
+  writeFileSync(join(root, 'index.html'), '<!doctype html><title>Lil Deadline test dashboard</title>');
+  const server = createAppServer(app, { root }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   return { dir, storage, app, server, url,
     post: (path: string, body: unknown) => fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Lil-Deadline': '1' }, body: JSON.stringify(body) }),
@@ -25,6 +27,19 @@ async function waitFor(predicate: () => boolean, timeout = 5000) {
   const deadline = Date.now() + timeout;
   while (!predicate()) { if (Date.now() > deadline) throw new Error('Expected state did not arrive'); await new Promise(r => setTimeout(r, 20)); }
 }
+
+// node:http preserves browser navigation metadata; fetch sets Sec-Fetch-Mode to cors.
+async function browserRequest(url: string, options: RequestOptions = {}) {
+  return new Promise<{ status: number | undefined; headers: IncomingHttpHeaders; body: string }>((resolve, reject) => {
+    request(url, options, response => {
+      let body = ''; response.setEncoding('utf8');
+      response.on('data', chunk => { body += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body }));
+      response.on('error', reject);
+    }).on('error', reject).end();
+  });
+}
+const navigationHeaders = { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' };
 
 test('Spotify routes expose only the authorization URL and reject an unmatched callback', async () => {
   const h = await harness();
@@ -39,6 +54,9 @@ test('Spotify routes expose only the authorization URL and reject an unmatched c
       headers: { Origin: 'https://accounts.spotify.com', 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' } });
     assert.equal(callback.status, 303);
     assert.equal(callback.headers.get('location'), '/?spotify=error');
+    const landing = await browserRequest(h.url + callback.headers.get('location'), { headers: navigationHeaders });
+    assert.equal(landing.status, 200);
+    assert.match(landing.body, /Lil Deadline test dashboard/);
     const snapshot = await (await fetch(h.url + '/api/state')).text();
     assert.ok(!snapshot.includes('code_verifier'));
     assert.ok(!snapshot.includes('forged'));
@@ -58,12 +76,59 @@ test('cross-site Spotify callback navigation is accepted while other API routes 
       assert.equal(params.get('code'), 'test-code');
       assert.equal(origin, h.url);
     };
-    const headers = { Origin: 'https://accounts.spotify.com', 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' };
-    const callback = await fetch(h.url + '/api/spotify/callback?code=test-code&state=test-state', { headers, redirect: 'manual' });
+    const headers = { ...navigationHeaders, Origin: 'https://accounts.spotify.com' };
+    const callback = await browserRequest(h.url + '/api/spotify/callback?code=test-code&state=test-state', { headers });
     assert.equal(callback.status, 303);
-    assert.equal(callback.headers.get('location'), '/?spotify=connected');
-    assert.equal((await fetch(h.url + '/api/state', { headers })).status, 403);
-    assert.equal((await fetch(h.url + '/api/spotify/authorize', { method: 'POST', headers: { ...headers, 'X-Lil-Deadline': '1' } })).status, 403);
+    assert.equal(callback.headers.location, '/?spotify=connected');
+    for (const landingHeaders of [navigationHeaders, headers, { ...navigationHeaders, Origin: 'null' }]) {
+      const landing = await browserRequest(h.url + callback.headers.location, { headers: landingHeaders });
+      assert.equal(landing.status, 200);
+      assert.match(landing.headers['content-type'] ?? '', /text\/html/);
+      assert.match(landing.body, /Lil Deadline test dashboard/);
+      assert.equal(landing.headers['x-frame-options'], 'DENY');
+      assert.equal(landing.headers['referrer-policy'], 'no-referrer');
+    }
+    assert.equal((await browserRequest(h.url + '/', { headers })).status, 200);
+    assert.equal((await browserRequest(h.url + '/api/state', { headers })).status, 403);
+    assert.equal((await browserRequest(h.url + '/api/spotify/authorize', { method: 'POST', headers: { ...headers, 'X-Lil-Deadline': '1' } })).status, 403);
+    assert.equal((await fetch(h.url + '/api/state', { headers: { Origin: h.url, 'Sec-Fetch-Site': 'same-origin' } })).status, 200);
+  } finally { await h.close(); }
+});
+
+test('cross-site dashboard navigation does not permit fetches, embedding, writes, or forged hosts', async () => {
+  const h = await harness();
+  try {
+    const headers = { ...navigationHeaders, Origin: 'https://untrusted.example' };
+    const cases: RequestOptions[] = [
+      { headers: { ...headers, 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' } },
+      { headers: { ...headers, 'Sec-Fetch-Mode': 'no-cors' } },
+      { headers: { ...headers, 'Sec-Fetch-Dest': 'iframe' } },
+      { headers: { ...headers, 'Sec-Fetch-Dest': 'object' } },
+      { headers: { Origin: headers.Origin } },
+      { headers: { ...headers, Host: 'evil.example' } },
+      { method: 'POST', headers },
+    ];
+    for (const options of cases) {
+      assert.equal((await browserRequest(h.url + '/?spotify=connected', options)).status, 403, JSON.stringify(options));
+    }
+  } finally { await h.close(); }
+});
+
+test('cover bytes are served only through the protected local artwork route', async () => {
+  const h = await harness();
+  const id = 'a'.repeat(64), bytes = Buffer.from([137, 80, 78, 71]);
+  const path = '/api/spotify/artwork?id=' + id;
+  let calls = 0;
+  h.app.spotify.artwork.get = async key => { calls++; return key === id ? { bytes, contentType: 'image/png' } : null; };
+  try {
+    const response = await fetch(h.url + path);
+    assert.equal(response.status, 200); assert.equal(response.headers.get('content-type'), 'image/png');
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(response.headers.get('cross-origin-resource-policy'), 'same-origin');
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+    assert.equal((await fetch(h.url + path, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
+    assert.equal(calls, 1, 'cross-site calls never reach the image fetcher');
+    assert.equal((await fetch(h.url + '/api/spotify/artwork?id=old')).status, 404);
   } finally { await h.close(); }
 });
 
@@ -87,6 +152,29 @@ test('Canvas accepts token-only updates after the school address is saved once',
     assert.equal((await h.post('/api/settings/canvas', { clearToken: true })).status, 200);
     assert.equal(h.storage.loadCanvasPersonalToken(), null);
     assert.equal(h.storage.loadSettings().canvas.baseUrl, mock.origin);
+  } finally { await h.close(); await mock.close(); }
+});
+
+test('Canvas accepts a pasted tilde token with surrounding whitespace and sends only the cleaned Bearer token', async () => {
+  const h = await harness();
+  const token = '12345~FakeCanvasTokenForTestsOnly_0123456789';
+  const mock = await startMockCanvas({ tokens: [token], handler: () => ({ body: [] }) });
+  try {
+    const response = await h.post('/api/settings/canvas', { baseUrl: mock.origin, token: `\r\n\u200b ${token}\u2060 \n` });
+    assert.equal(response.status, 200);
+    assert.ok(!(await response.text()).includes(token));
+    assert.equal(h.storage.loadCanvasPersonalToken(), token);
+    await waitFor(() => h.app.canvasSync.status().snapshot !== null && !h.app.canvasSync.status().refreshing);
+    assert.ok(mock.requests.length > 0);
+    assert.deepEqual(mock.violations, []);
+    const bad = await h.post('/api/settings/canvas', { token: '12345~fake token' });
+    assert.equal(bad.status, 400);
+    const error = (await bad.json() as { error: string }).error;
+    assert.match(error, /spaces or line breaks/);
+    assert.ok(!error.includes('12345~fake token'));
+    assert.equal(h.storage.loadCanvasPersonalToken(), token);
+    assert.equal((await h.post('/api/settings/canvas', { token: ' \r\n' })).status, 200);
+    assert.equal(h.storage.loadCanvasPersonalToken(), token, 'blank replacement keeps the saved token');
   } finally { await h.close(); await mock.close(); }
 });
 

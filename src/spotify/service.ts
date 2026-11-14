@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { AppStorage } from '../host/storage.ts';
+import { SpotifyArtwork } from './artwork.ts';
 
 export const SPOTIFY_SCOPES = 'user-read-playback-state user-modify-playback-state';
 export const SPOTIFY_CALLBACK_PATH = '/api/spotify/callback';
@@ -7,6 +8,7 @@ export type SpotifyAction = 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 
 export interface SpotifyStatus {
   configured: boolean; connected: boolean; playback: 'playing' | 'paused' | 'no-device' | 'unknown';
   track: string | null; artist: string | null; device: string | null; volume: number | null;
+  artworkUrl: string | null; trackUrl: string | null;
   message: string | null; lastUpdatedAt: number | null;
 }
 type Pending = { state: string; verifier: string; redirectUri: string; expiresAt: number };
@@ -16,13 +18,15 @@ export class SpotifyError extends Error {}
 
 /** One host-side Spotify user session. OAuth state and tokens never reach browser state. */
 export class SpotifyService {
+  readonly artwork: SpotifyArtwork;
   private readonly storage: AppStorage;
   private readonly fetchFn: typeof fetch;
   private pending: Pending | null = null;
   private refreshFlight: Promise<string> | null = null;
-  private statusValue: SpotifyStatus = { configured: false, connected: false, playback: 'unknown', track: null, artist: null, device: null, volume: null, message: null, lastUpdatedAt: null };
+  private statusValue: SpotifyStatus = { configured: false, connected: false, playback: 'unknown', track: null, artist: null, device: null, volume: null, artworkUrl: null, trackUrl: null, message: null, lastUpdatedAt: null };
   private rateLimitUntil = 0;
-  constructor(storage: AppStorage, fetchFn: typeof fetch = fetch) { this.storage = storage; this.fetchFn = fetchFn; }
+  private playbackRequest = 0;
+  constructor(storage: AppStorage, fetchFn: typeof fetch = fetch) { this.storage = storage; this.fetchFn = fetchFn; this.artwork = new SpotifyArtwork(fetchFn); }
   status(): SpotifyStatus {
     const clientId = this.storage.loadSettings().spotify.clientId;
     return { ...this.statusValue, configured: !!clientId, connected: !!clientId && !!this.storage.loadSpotifyTokens() };
@@ -33,8 +37,10 @@ export class SpotifyService {
     if (previous !== clientId) { this.disconnect(); this.storage.updateSettings(s => { s.spotify.clientId = clientId; }); }
   }
   disconnect(): void {
+    this.playbackRequest++;
+    this.artwork.clear();
     this.pending = null; this.storage.saveSpotifyTokens(null);
-    this.statusValue = { configured: !!this.storage.loadSettings().spotify.clientId, connected: false, playback: 'unknown', track: null, artist: null, device: null, volume: null, message: null, lastUpdatedAt: null };
+    this.statusValue = { configured: !!this.storage.loadSettings().spotify.clientId, connected: false, playback: 'unknown', track: null, artist: null, device: null, volume: null, artworkUrl: null, trackUrl: null, message: null, lastUpdatedAt: null };
   }
   authorizeUrl(origin: string): string {
     const clientId = this.storage.loadSettings().spotify.clientId;
@@ -107,7 +113,7 @@ export class SpotifyService {
       this.rateLimitUntil = Date.now() + (Number.isFinite(seconds) ? Math.min(Math.max(seconds, 1), 60) : 5) * 1000;
       throw new SpotifyError('Spotify is rate limiting requests. Try again shortly.');
     }
-    if (response.status === 401) { this.disconnect(); throw new SpotifyError('Spotify authorization expired. Connect again in Settings.'); }
+    if (response.status === 401) { this.disconnect(); this.statusValue.message = 'Spotify authorization expired. Connect again in Settings.'; throw new SpotifyError(this.statusValue.message); }
     if (response.status === 403) throw new SpotifyError('Spotify denied playback control. A Premium account and an allowed app user are required.');
     if (response.status === 404) throw new SpotifyError('No active Spotify playback device. Open Spotify and start a track there.');
     if (!response.ok) throw new SpotifyError(`Spotify playback request failed (HTTP ${response.status}).`);
@@ -116,19 +122,28 @@ export class SpotifyService {
   async refreshPlayback(force = false): Promise<SpotifyStatus> {
     if (!this.status().connected) return this.status();
     if (!force && this.statusValue.lastUpdatedAt && Date.now() - this.statusValue.lastUpdatedAt < 5000) return this.status();
+    const request = ++this.playbackRequest;
     try {
       const response = await this.api('/me/player', 'GET');
+      if (request !== this.playbackRequest) { await response.body?.cancel(); return this.status(); }
       if (response.status === 204) {
-        this.statusValue = { ...this.statusValue, playback: 'no-device', track: null, artist: null, device: null, volume: null, message: 'Open Spotify and start a track on a device.', lastUpdatedAt: Date.now() };
+        this.artwork.clear();
+        this.statusValue = { ...this.statusValue, playback: 'no-device', track: null, artist: null, device: null, volume: null, artworkUrl: null, trackUrl: null, message: 'Open Spotify and start a track on a device.', lastUpdatedAt: Date.now() };
       } else {
         const data = obj(await response.json()), item = obj(data.item), device = obj(data.device);
+        if (request !== this.playbackRequest) return this.status();
         const artists = Array.isArray(item.artists) ? item.artists.map(v => text(obj(v).name)).filter(Boolean) : [];
+        const trackUrl = obj(item.external_urls).spotify;
         this.statusValue = { ...this.statusValue, playback: data.is_playing === true ? 'playing' : 'paused', track: text(item.name), artist: artists.join(', ').slice(0, 180) || null,
+          artworkUrl: this.artwork.select(obj(item.album).images),
+          trackUrl: typeof trackUrl === 'string' && /^https:\/\/open\.spotify\.com\/track\/[a-z\d]+$/i.test(trackUrl) ? trackUrl : null,
           device: text(device.name), volume: typeof device.volume_percent === 'number' ? Math.max(0, Math.min(100, device.volume_percent)) : null,
           message: null, lastUpdatedAt: Date.now() };
       }
     } catch (error) {
-      this.statusValue = { ...this.statusValue, playback: 'unknown', track: null, artist: null, device: null, volume: null,
+      if (request !== this.playbackRequest) return this.status();
+      this.artwork.clear();
+      this.statusValue = { ...this.statusValue, playback: 'unknown', track: null, artist: null, device: null, volume: null, artworkUrl: null, trackUrl: null,
         message: error instanceof SpotifyError ? error.message : 'Spotify status unavailable.' };
     }
     return this.status();

@@ -152,7 +152,30 @@ test('Canvas secrets are stored beside the device token without clobbering it', 
     }
     storage.saveDeviceToken(null);
     assert.equal(storage.loadCanvasPersonalToken(), 'canvas-test-token-0000', 'clearing one secret keeps the others');
-    assert.throws(() => storage.saveCanvasPersonalToken('has space token'), /printable/);
+    assert.throws(() => storage.saveCanvasPersonalToken('has space token'), /spaces or line breaks/);
+  } finally { cleanup(); }
+});
+
+test('Canvas token paste cleanup preserves tilde tokens and rejects internal formatting without exposing secrets', () => {
+  const { storage, cleanup } = tempStorage();
+  const token = '12345~FakeCanvasTokenForTestsOnly_0123456789';
+  try {
+    storage.updateSettings(s => { s.canvas.baseUrl = 'https://canvas.example.edu'; });
+    storage.saveCanvasPersonalToken(` \r\n\t\u200b\ufeff${token}\u2060 \r\n`);
+    assert.equal(storage.loadCanvasPersonalToken(), token);
+    assert.ok(!readFileSync(storage.settingsPath, 'utf8').includes(token));
+    for (const [bad, expected] of [
+      ['12345~fake token suffix', /spaces or line breaks/],
+      ['12345~fake\r\nTokenSuffix', /spaces or line breaks/],
+      ['12345~fake\u200bTokenSuffix', /hidden or unsupported/],
+      ['12345~fake\u0000TokenSuffix', /hidden or unsupported/],
+      ['12345~fakeéTokenSuffix', /hidden or unsupported/],
+    ] as const) {
+      assert.throws(() => storage.saveCanvasPersonalToken(bad), (error: Error) => expected.test(error.message) && !error.message.includes(bad));
+      assert.equal(storage.loadCanvasPersonalToken(), token, 'rejected input preserves the saved credential');
+    }
+    storage.saveCanvasPersonalToken(null);
+    assert.equal(storage.loadCanvasPersonalToken(), null);
   } finally { cleanup(); }
 });
 

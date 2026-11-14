@@ -32,3 +32,25 @@ export class MultipartParser {
     if (this.length !== null || this.buffer.toString('ascii').trim() !== '') throw new Error('Truncated camera stream');
   }
 }
+
+/** Read native JPEG dimensions without decoding pixels or trusting HTTP metadata. */
+export function jpegDimensions(jpeg: Uint8Array): { width: number; height: number } | null {
+  if (jpeg[0] !== 255 || jpeg[1] !== 216) return null;
+  let offset = 2;
+  while (offset + 1 < jpeg.length) {
+    if (jpeg[offset++] !== 255) return null;
+    while (jpeg[offset] === 255) offset++;
+    const marker = jpeg[offset++];
+    if (marker === undefined || marker === 218 || marker === 217) return null;
+    if (marker === 1 || (marker >= 208 && marker <= 216)) continue;
+    if (offset + 1 >= jpeg.length) return null;
+    const length = (jpeg[offset]! << 8) | jpeg[offset + 1]!;
+    if (length < 2 || offset + length > jpeg.length) return null;
+    if (marker >= 192 && marker <= 207 && ![196, 200, 204].includes(marker) && length >= 7) {
+      const height = (jpeg[offset + 3]! << 8) | jpeg[offset + 4]!, width = (jpeg[offset + 5]! << 8) | jpeg[offset + 6]!;
+      return width > 0 && height > 0 && width <= 8192 && height <= 8192 ? { width, height } : null;
+    }
+    offset += length;
+  }
+  return null;
+}

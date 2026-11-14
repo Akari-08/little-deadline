@@ -139,6 +139,7 @@ class GestureInterpreter:
         volume_cooldown_seconds: float = 0.0,
         volume_lock_seconds: float = 1.5,
         volume_sensitivity: float = 8.0,
+        mirror_volume_direction: bool = True,
     ):
         if cooldown_seconds < 0:
             raise ValueError("cooldown_seconds must be non-negative.")
@@ -157,6 +158,7 @@ class GestureInterpreter:
         self.volume_cooldown_seconds = volume_cooldown_seconds
         self.volume_lock_seconds = volume_lock_seconds
         self.volume_sensitivity = volume_sensitivity
+        self._volume_direction = -1 if mirror_volume_direction else 1
         self._last_event: dict[str, float] = {}
         self._last_volume_at = float("-inf")
         self._last_index_at = float("-inf")
@@ -176,6 +178,19 @@ class GestureInterpreter:
         self._last_circle_point: tuple[float, float] | None = None
         self._last_relative_circle_angle: float | None = None
         self._last_relative_circle_point: tuple[float, float] | None = None
+
+    def reset_tracking(self) -> None:
+        """Forget old poses/motion after hand loss; retain action cooldowns."""
+        self._candidate_gesture = None
+        self._candidate_frames = 0
+        self._stable_gesture = None
+        self._motion_path.clear()
+        self._circle_path.clear()
+        self._relative_circle_path.clear()
+        self._last_circle_angle = None
+        self._last_circle_point = None
+        self._last_relative_circle_angle = None
+        self._last_relative_circle_point = None
 
     def _emit(
         self,
@@ -343,12 +358,12 @@ class GestureInterpreter:
         if point_distance < 0.01 or abs(delta) < 0.02:
             return None
 
-        # The live webcam view is mirrored, so invert screen-angle direction:
-        # clockwise movement must produce a positive volume delta.
+        # Legacy webcam tools mirror the view. The ESP stream stays unmirrored,
+        # where positive screen angles are clockwise (image Y points down).
         event = self._emit(
             "volume_change",
             now,
-            -delta * self.volume_sensitivity,
+            self._volume_direction * delta * self.volume_sensitivity,
             cooldown=self.volume_cooldown_seconds,
         )
         if event is not None:

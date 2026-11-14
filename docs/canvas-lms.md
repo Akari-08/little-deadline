@@ -16,6 +16,13 @@ domain from the token itself. A Canvas OAuth developer key/client ID cannot be
 used as a personal access token. Changing schools requires a token for the new
 school, so an existing token is never sent to a different Canvas host.
 
+Paste the personal token directly from Canvas on one line, including `~` if
+present. Do not include quotes, chat formatting, or added backslashes. The app
+removes surrounding whitespace and invisible paste formatting; spaces, line
+breaks, or unsupported characters inside the token produce an error without
+echoing the credential. A blank replacement keeps the saved token; **Clear
+token** removes it explicitly.
+
 - **Auth: per-user personal access tokens.** Each user creates a token in Canvas and enters
   it into their own local copy of TaskPet. A school-issued OAuth developer key is not
   available, so "Sign in with Canvas" (OAuth2 + PKCE) is parked in git history at `f64a89c`

@@ -5,8 +5,9 @@ progress. React + TypeScript renders one opaque **240×320 Canvas 2D surface**;
 the Node.js host mirrors those same pixels to the existing ESP32 using
 **TaskPet Link v1**. Branding lives in [src/branding.ts](src/branding.ts).
 
-The app works without hardware. The ESP32 firmware is already installed and
-does not need modification or reflashing. External IMU/environment sensors and
+The app works without hardware. The installed ESP32 firmware supports the app;
+800×600 camera capture requires the firmware update in [camera setup](docs/camera.md).
+External IMU/environment sensors and
 the physical button are absent in the current hardware setup; unavailable values
 are expected. Mouse and keyboard controls drive pet interaction.
 
@@ -18,12 +19,12 @@ are expected. Mouse and keyboard controls drive pet interaction.
   priorities, filters, and a clearly labelled Mock demo starter set.
 - Host-owned device connection, ACK-paced 5 fps stream, bounded retries, and
   diagnostics with stale/frozen display indicators.
-- Backend camera proxy for the supplied authenticated 320×240 MJPEG stream.
+- Shared authenticated ESP32 MJPEG feed with native-resolution and measured-FPS reporting.
 - Canvas LMS and Notion read-only task imports with backend-only credentials,
   pagination, timeouts, rate-limit handling, and persisted last-good snapshots.
 - Optional Spotify playback card with host-side PKCE account linking, track,
   play/pause, skip, and volume controls.
-- Optional computer-webcam hand gestures from `CV/` change slides, control
+- Optional ESP32-camera hand gestures from `CV/` change slides, control
   Spotify, and greet Sprout. Camera viewing does not record video or recognize faces.
 
 Checking a task locally never submits Canvas coursework, changes grades, or
@@ -55,8 +56,8 @@ in shells where `npm` is allowed. The Windows spelling avoids PowerShell's
 `npm.ps1` execution-policy restriction; no policy changes are needed.
 
 The development command serves the React frontend and Node API on one loopback
-origin. Frontend source changes are picked up on page reload; restart the command
-after backend changes. Stop the server with Ctrl+C.
+origin. Backend source changes restart the host automatically. Reload the page
+after frontend changes. Stop the server with Ctrl+C.
 
 ### Production build and run
 
@@ -108,11 +109,12 @@ tabs share the host connection; one active renderer has a short renewable lease.
 Keep a dashboard tab visible to stream its canvas. Closing/minimizing all tabs
 can stop browser rendering; the UI reports stale or frozen display state.
 
-Open **Camera** and click **Open camera** for the independent camera feed.
+Open **Camera** and click **Open camera** for the camera feed.
 The backend attaches the Bearer token to `http://DEVICE:8080/stream`; the frontend
 receives only the same-origin stream. Only one camera viewer can be active.
-Closing the camera view, stopping it, or disconnecting cancels the upstream
-request. Another tab receives HTTP 409. The host never polls `/status`,
+Preview and hand detection share one upstream request. Closing the preview
+leaves active gestures running; stopping both or disconnecting cancels it.
+Another preview tab receives HTTP 409. The host never polls `/status`,
 `/capture`, or `/sensors` during the camera stream. HTTP 401 means invalid
 authorization; 503 means the camera is unavailable.
 
@@ -142,23 +144,23 @@ settings. The ESP32 does not receive Spotify credentials or audio. Playback
 occurs in a Spotify app or device, not in the 240×320 preview. See
 [Spotify setup](docs/spotify.md) for details.
 
-**CV display and music gestures:** Click **Start gestures** on the music card.
-This uses the **computer webcam**, independently of the ESP32 camera viewer.
-Point two fingers horizontally right or left to move through display slides.
-Fist toggles Spotify playback, rotated open hand skips tracks, a
-pointing-finger circle changes volume, and a wave greets Sprout. Display
-navigation and greeting work without Spotify; music gestures need a linked
-account. Click **Stop gestures** to release the webcam. To install the optional
-Python dependencies on Windows:
+**CV display and music gestures:** Click **Start gestures** on the music card
+or Camera page. This processes the **ESP32 camera live feed** locally. Preview
+and gestures share one stream; stop each independently. Two fingers left/right
+change slides, fist toggles playback, a rotated open hand skips, a pointing-finger
+circle adjusts volume, and a wave greets Sprout. Slide navigation and greeting
+work without Spotify.
+
+Install the optional Python environment on Windows:
 
 ```powershell
-py -3 -m pip install opencv-python mediapipe
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r CV/requirements.txt
 ```
 
-The bundled `CV/models/hand_landmarker.task` must also be present. If your
-Python executable is not `py -3`, set `LIL_DEADLINE_PYTHON` to its path before
-starting the Node host. The app sends only gesture event names from Python to
-Node; no webcam frames are uploaded. Music buttons work without CV.
+The host automatically uses this environment. See [camera setup](docs/camera.md)
+for Linux/macOS, troubleshooting, and the 800×600 firmware update. No camera
+frames are stored or sent to a cloud service.
 
 **Canvas LMS:** enter your school's Canvas website address once, then paste a
 personal API access token in Settings. Future token replacements need only the
@@ -180,7 +182,7 @@ npm.cmd run build
 node --import tsx scripts/render-preview.ts
 ```
 
-`check` runs TypeScript, 137 application tests, 10 preserved connector tests,
+`check` runs TypeScript, application tests, 10 preserved connector tests,
 and the real local TCP WebSocket loopback test. Coverage includes task CRUD and
 restart persistence, pet/timer state, deterministic opaque rendering, RGB565
 color bits, strip ordering, ACK pacing, reconnects, missing/stale sensors,
@@ -193,9 +195,10 @@ was blocked by the computer-use URL access check, so responsive layout and
 interactive browser rendering still need a manual pass. Physical screen colors,
 orientation, camera video, Wi-Fi reliability, and live Canvas/Notion credentials
 have not been verified. ACKs confirm driver writes, not optical verification.
-Spotify authorization, live playback, and webcam gestures require your account
-and hardware and have not been verified here. Legacy CV tests could not run in
-this environment because OpenCV (`cv2`) is missing.
+Hand pose accuracy and higher-resolution firmware need physical validation.
+Run the hardware-free Python checks from `CV/` with
+`..\.venv\Scripts\python.exe -m unittest test_slide_gestures test_camera_bridge`.
+The older emotion experiments additionally require their own ML dependencies.
 
 ## Repository layout
 
@@ -204,7 +207,7 @@ src/                  Application, device, sensor, task, and storage code
 web/                  React dashboard and responsive styles
 src/render/face.ts     Canonical deterministic Canvas 2D renderer
 src/host/server.ts     Loopback API and frontend server
-src/camera/            Bounded MJPEG parser and single-viewer proxy
+src/camera/            Bounded MJPEG parser and shared preview/gesture stream
 src/notion/            Read-only Notion task provider
 src/spotify/           Host-side Spotify PKCE and playback service
 src/cv/                Bounded Python gesture bridge

@@ -2,6 +2,8 @@ import { BRAND } from '../branding.ts';
 import { mood, remainingTime, type CompanionState } from '../pet/state.ts';
 import { DISPLAY_SLIDES, DISPLAY_SLIDE_LABELS } from '../pet/slides.ts';
 export const FACE_WIDTH = 240, FACE_HEIGHT = 320;
+export interface FaceImage { source: CanvasImageSource; width: number; height: number }
+export interface FaceAssets { artwork?: FaceImage | null; spotifyLogo?: FaceImage | null }
 export interface FaceState {
   companion: CompanionState; task: string | null; done: number; total: number; status: string;
   tasks?: readonly { title: string; done: boolean }[];
@@ -27,7 +29,7 @@ const sprite = [
   '    ooooooo      ',
   '    oo   oo      ',
 ];
-export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now: number): void {
+export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now: number, assets: FaceAssets = {}): void {
   const { companion: s } = state, feeling = mood(s, now);
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#19282d'; ctx.fillRect(0, 0, FACE_WIDTH, FACE_HEIGHT);
@@ -48,7 +50,12 @@ export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now:
   if (slide !== 'pet') {
     text('LIL DEADLINE', 16, 25, 11, '#d2e8d7');
     text(`${DISPLAY_SLIDES.indexOf(slide) + 1} / ${DISPLAY_SLIDES.length}`, 224, 25, 10, '#a6b9a9', 'right');
-    text(DISPLAY_SLIDE_LABELS[slide].toUpperCase(), 16, 60, 21, '#c6e7a8');
+    if (slide === 'music' && assets.spotifyLogo) {
+      const logo = assets.spotifyLogo;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(logo.source, 16, 40, 84, 84 * logo.height / logo.width);
+      ctx.imageSmoothingEnabled = false;
+    } else text(DISPLAY_SLIDE_LABELS[slide].toUpperCase(), 16, 60, 21, '#c6e7a8');
     ctx.fillStyle = '#31443f'; ctx.fillRect(16, 72, 208, 2);
     if (slide === 'tasks') {
       text(`${state.done} of ${state.total} little wins`, 16, 100, 12, '#c6e7a8');
@@ -73,11 +80,20 @@ export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now:
       text(`${s.timer.sessions} sessions completed`, 120, 302, 10, '#92aba0', 'center');
     } else if (slide === 'music') {
       const music = state.music;
-      text(music?.connected ? music.playback.toUpperCase() : 'NOT LINKED', 120, 109, 12, '#b7dda5', 'center');
-      text('♪', 120, 182, 66, '#b7dda5', 'center');
-      ctx.fillStyle = '#111f24'; ctx.fillRect(12, 213, 216, 72);
-      text(fit(music?.track ?? 'Your little soundtrack'), 24, 239, 12, '#ebeee2');
-      text(fit(music?.artist ?? (music?.connected ? 'Start playback in Spotify' : 'Link Spotify in Settings'), 186, 10), 24, 259, 10, '#a1b9ad');
+      text(music?.connected ? music.playback.toUpperCase() : 'NOT LINKED', 224, 58, 10, '#b7dda5', 'right');
+      const art = music?.connected && music.track ? assets.artwork : null;
+      ctx.fillStyle = '#111f24'; ctx.fillRect(48, 82, 144, 144);
+      if (art && art.width > 0 && art.height > 0) {
+        // Contain the entire image, retaining its aspect ratio and unobscured artwork.
+        const scale = Math.min(144 / art.width, 144 / art.height);
+        const w = art.width * scale, h = art.height * scale, x = (240 - w) / 2, y = 82 + (144 - h) / 2;
+        ctx.save(); ctx.beginPath(); ctx.roundRect(x, y, w, h, 4); ctx.clip();
+        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(art.source, x, y, w, h); ctx.restore();
+      } else text('♪', 120, 179, 66, '#b7dda5', 'center');
+      ctx.fillStyle = '#111f24'; ctx.fillRect(12, 234, 216, 51);
+      text(fit(music?.track ?? 'Your little soundtrack'), 24, 253, 12, '#ebeee2');
+      text(fit(music?.artist ?? (music?.connected ? 'Start playback in Spotify' : 'Link Spotify in Settings'), 186, 10), 24, 273, 10, '#a1b9ad');
       text(music?.volume == null ? 'VOLUME UNAVAILABLE' : `VOLUME ${Math.round(music.volume)}%`, 120, 302, 10, '#92aba0', 'center');
     } else {
       const sensors = state.sensors;

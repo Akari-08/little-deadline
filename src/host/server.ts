@@ -25,7 +25,11 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
     // Spotify redirects the browser from accounts.spotify.com. That navigation is
     // cross-site by design; the callback validates the one-time OAuth state.
     const spotifyCallback = req.method === 'GET' && url.pathname === '/api/spotify/callback';
-    if (!spotifyCallback && ((req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) || req.headers['sec-fetch-site'] === 'cross-site')) { json(res, 403, { error: 'Origin not permitted.' }); return; }
+    // Redirects retain cross-site metadata on the final dashboard request. Allow
+    // only a top-level GET of the app shell; APIs, fetches and embeds stay protected.
+    const dashboardNavigation = req.method === 'GET' && url.pathname === '/' &&
+      req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document';
+    if (!spotifyCallback && !dashboardNavigation && ((req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) || req.headers['sec-fetch-site'] === 'cross-site')) { json(res, 403, { error: 'Origin not permitted.' }); return; }
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     if (url.pathname.startsWith('/api/')) {
@@ -36,6 +40,13 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/state') { json(res, 200, app.snapshot()); return; }
+      if (req.method === 'GET' && url.pathname === '/api/spotify/artwork') {
+        const image = await app.spotify.artwork.get(url.searchParams.get('id'));
+        if (!image) { res.writeHead(404).end(); return; }
+        res.writeHead(200, { 'Content-Type': image.contentType, 'Content-Length': image.bytes.length,
+          'Cross-Origin-Resource-Policy': 'same-origin' }).end(image.bytes);
+        return;
+      }
       if (req.method === 'GET' && url.pathname === '/api/camera/stream') {
         try { await validateLanAddress(app.storage.loadSettings().device.address); }
         catch { json(res, 503, { error: 'Configure a reachable LAN camera first.' }); return; }

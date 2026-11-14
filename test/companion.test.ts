@@ -80,3 +80,31 @@ test('each display slide uses the same opaque 240×320 surface and distinct pixe
   assert.equal(images.size, DISPLAY_SLIDES.length);
   assert.equal(canvas.width, 240); assert.equal(canvas.height, 320);
 });
+
+test('music artwork is contained on the canonical surface and survives RGB565 frame encoding', () => {
+  const canvas = createCanvas(240, 320), cover = createCanvas(200, 100);
+  const art = cover.getContext('2d');
+  art.fillStyle = '#ff0000'; art.fillRect(0, 0, 100, 100);
+  art.fillStyle = '#0000ff'; art.fillRect(100, 0, 100, 100);
+  const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D;
+  const s = { companion: defaultCompanion(1000), task: null, done: 0, total: 0, status: 'PREVIEW MODE',
+    music: { connected: true, playback: 'playing', track: 'Sample track', artist: 'Sample artist', volume: 40 } };
+  s.companion.displaySlide = 'music';
+  const assets = { artwork: { source: cover as unknown as CanvasImageSource, width: 200, height: 100 } };
+  const pixels = () => Buffer.from(ctx.getImageData(0, 0, 240, 320).data);
+  renderFace(ctx, s, 40000, assets); const first = pixels();
+  assert.deepEqual([...ctx.getImageData(60, 140, 1, 1).data], [255, 0, 0, 255]);
+  assert.deepEqual([...ctx.getImageData(180, 140, 1, 1).data], [0, 0, 255, 255]);
+  assert.deepEqual([...ctx.getImageData(120, 100, 1, 1).data], [17, 31, 36, 255], 'wide art is letterboxed, not stretched');
+  renderFace(ctx, s, 40000, assets); assert.ok(pixels().equals(first));
+  assert.ok(first.every((value, i) => i % 4 !== 3 || value === 255));
+  const packed = rgbaToRGB565LE(first); assert.equal(packed.length, 153600);
+  assert.deepEqual([...packed.subarray((140 * 240 + 60) * 2, (140 * 240 + 60) * 2 + 2)], [0, 248]);
+  quantizeSurface(ctx); assert.deepEqual(rgbaToRGB565LE(pixels()), packed);
+  renderFace(ctx, s, 40000); assert.ok(!pixels().equals(first), 'missing art renders the fallback');
+  const fallback = pixels();
+  s.music.connected = false; s.music.track = '';
+  renderFace(ctx, s, 40000, assets);
+  assert.deepEqual(pixels().subarray(82 * 240 * 4, 226 * 240 * 4), fallback.subarray(82 * 240 * 4, 226 * 240 * 4), 'disconnected state never shows cached artwork');
+  assert.equal(canvas.width, 240); assert.equal(canvas.height, 320);
+});

@@ -88,6 +88,7 @@ std::atomic<uint32_t> cameraFrames{0};
 portMUX_TYPE sensorCacheLock=portMUX_INITIALIZER_UNLOCKED;
 char sensorCache[1600]="{\"type\":\"sensors\",\"status\":\"starting\"}";
 constexpr uint32_t CAMERA_INTERVAL_MS=200; // Target 5 fps; not guaranteed.
+constexpr unsigned CAMERA_WIDTH=800, CAMERA_HEIGHT=600;
 
 String readSetupLine() {
   String line; line.reserve(129); bool overflow=false;
@@ -150,12 +151,12 @@ void startCamera() {
   config.pin_sccb_sda=26; config.pin_sccb_scl=27;
   config.pin_pwdn=-1; config.pin_reset=-1;
   config.xclk_freq_hz=20000000;
-  config.pixel_format=PIXFORMAT_JPEG; config.frame_size=FRAMESIZE_QVGA;
-  config.jpeg_quality=15; config.fb_count=2;
+  config.pixel_format=PIXFORMAT_JPEG; config.frame_size=FRAMESIZE_SVGA;
+  config.jpeg_quality=12; config.fb_count=2; // Lower number means higher JPEG quality.
   config.fb_location=CAMERA_FB_IN_PSRAM; config.grab_mode=CAMERA_GRAB_LATEST;
   cameraInitResult=esp_camera_init(&config);
   cameraReady=cameraInitResult==ESP_OK;
-  Serial.printf("Freenove WROVER camera: %s (0x%x)\n",cameraReady?"ready, JPEG 320x240":"FAILED",unsigned(cameraInitResult));
+  Serial.printf("Freenove WROVER camera: %s (0x%x), JPEG %ux%u\n",cameraReady?"ready":"FAILED",unsigned(cameraInitResult),CAMERA_WIDTH,CAMERA_HEIGHT);
 }
 bool cameraAuthorized(httpd_req_t *req) {
   char authorization[160];
@@ -183,8 +184,8 @@ esp_err_t cameraUnavailable(httpd_req_t *req) {
 esp_err_t cameraStatusHandler(httpd_req_t *req) {
   if(!cameraAuthorized(req)) return requireCameraAuthorization(req);
   char out[260];
-  snprintf(out,sizeof(out),"{\"camera_available\":%s,\"camera_init_error\":%d,\"width\":320,\"height\":240,\"format\":\"jpeg\",\"target_fps\":5,\"frames_sent\":%lu}",
-    cameraReady?"true":"false",int(cameraInitResult),(unsigned long)cameraFrames.load());
+  snprintf(out,sizeof(out),"{\"camera_available\":%s,\"camera_init_error\":%d,\"width\":%u,\"height\":%u,\"format\":\"jpeg\",\"target_fps\":5,\"frames_sent\":%lu}",
+    cameraReady?"true":"false",int(cameraInitResult),CAMERA_WIDTH,CAMERA_HEIGHT,(unsigned long)cameraFrames.load());
   httpd_resp_set_type(req,"application/json"); httpd_resp_set_hdr(req,"Cache-Control","no-store");
   return httpd_resp_send(req,out,HTTPD_RESP_USE_STRLEN);
 }
@@ -415,7 +416,7 @@ void socketEvent(uint8_t client,WStype_t type,uint8_t *payload,size_t length) {
         sendError(client,"auth_failed"); socketServer.disconnect(client); return;
       }
       owner=client; pendingAuth[client]=false;
-      String ready="{\"type\":\"ready\",\"protocol\":\"taskpet-link/1\",\"width\":240,\"height\":320,\"format\":\"rgb565le\",\"max_strip_rows\":16,\"telemetry_hz\":20,\"button_enabled\":false,\"camera\":{\"available\":"+String(cameraReady?"true":"false")+",\"http_port\":8080,\"stream_path\":\"/stream\",\"capture_path\":\"/capture\",\"width\":320,\"height\":240,\"format\":\"mjpeg\"}}";
+      String ready="{\"type\":\"ready\",\"protocol\":\"taskpet-link/1\",\"width\":240,\"height\":320,\"format\":\"rgb565le\",\"max_strip_rows\":16,\"telemetry_hz\":20,\"button_enabled\":false,\"camera\":{\"available\":"+String(cameraReady?"true":"false")+",\"http_port\":8080,\"stream_path\":\"/stream\",\"capture_path\":\"/capture\",\"width\":"+String(CAMERA_WIDTH)+",\"height\":"+String(CAMERA_HEIGHT)+",\"format\":\"mjpeg\"}}";
       socketServer.sendTXT(client,ready);
       Serial.println("App authenticated");
       sendSensors();

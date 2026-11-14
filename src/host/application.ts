@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { AppStorage, checkApiCredential } from './storage.ts';
+import { AppStorage, checkApiCredential, normalizeCanvasPersonalToken } from './storage.ts';
 import { DeviceService } from './device-service.ts';
 import { TaskStore } from '../tasks/store.ts';
 import { TaskSync } from '../tasks/sync.ts';
@@ -62,7 +62,7 @@ export class Application {
     this.spotify = new SpotifyService(storage);
     this.cvMusic = new CvMusicBridge(this.spotify,
       () => { this.companion.pet.lastInteractionAt = Date.now(); this.companion.pet.celebrateUntil = Date.now() + 2000; this.save(); },
-      direction => { this.companion.displaySlide = moveDisplaySlide(this.companion.displaySlide, direction); this.save(); });
+      direction => { this.companion.displaySlide = moveDisplaySlide(this.companion.displaySlide, direction); this.save(); }, this.camera);
     const settings = storage.loadSettings();
     this.device.configure({ address: settings.device.address, token: storage.loadDeviceToken() });
     this.canvasSync = new TaskSync({ store: this.tasks, intervalMs: () => storage.loadSettings().canvas.refreshMinutes * 60_000,
@@ -128,7 +128,7 @@ export class Application {
       const normalized = address ? await validateLanAddress(address) : '';
       const token = typeof body.token === 'string' && body.token ? body.token : null;
       if (token) { const error = checkDeviceToken(token); if (error) throw new InputError(error); }
-      this.camera.stop();
+      this.cvMusic.stop(); this.camera.stop();
       if (token) this.storage.saveDeviceToken(token);
       if (body.clearToken === true) this.storage.saveDeviceToken(null);
       this.storage.updateSettings(settings => { settings.device.address = normalized; settings.device.autoConnect = false; });
@@ -136,14 +136,14 @@ export class Application {
     } else if (path === '/api/device/connect') {
       await validateLanAddress(this.storage.loadSettings().device.address);
       this.device.connect();
-    } else if (path === '/api/device/disconnect') { this.device.disconnect(); this.camera.stop(); this.frame = null; }
+    } else if (path === '/api/device/disconnect') { this.device.disconnect(); this.cvMusic.stop(); this.camera.stop(); this.frame = null; }
     else if (path === '/api/settings/canvas') {
       if (this.canvasSync.status().refreshing) throw new InputError('Wait for the current Canvas refresh before changing settings.');
       const previous = this.storage.loadSettings().canvas.baseUrl;
       const url = typeof body.baseUrl === 'string' ? body.baseUrl.trim() : previous;
       const parsed = url ? parseCanvasBaseUrl(url) : null;
       if (parsed && !parsed.ok) throw new InputError(parsed.error);
-      const token = string(body.token);
+      const token = normalizeCanvasPersonalToken(string(body.token));
       if (token && !parsed) throw new InputError("Set your school's Canvas address once before saving an API token.");
       if (parsed?.ok && previous && parsed.origin !== previous && !token) throw new InputError('Enter a new Canvas API token when changing schools.');
       if (token) { const error = checkApiCredential(token, 'Canvas token'); if (error) throw new InputError(error); this.storage.saveCanvasPersonalToken(token); }
@@ -168,13 +168,14 @@ export class Application {
       try { await this.spotify.control(string(body.command) as SpotifyAction, typeof body.value === 'number' ? body.value : undefined); }
       catch (error) { throw new InputError(error instanceof Error ? error.message : 'Spotify control failed.'); }
     } else if (path === '/api/cv/start') {
-      try { this.cvMusic.start(); } catch (error) { throw new InputError(error instanceof Error ? error.message : 'Could not start music gestures.'); }
+      const address = await validateLanAddress(this.storage.loadSettings().device.address);
+      try { this.cvMusic.start(address, this.storage.loadDeviceToken()); } catch (error) { throw new InputError(error instanceof Error ? error.message : 'Could not start music gestures.'); }
     } else if (path === '/api/cv/stop') this.cvMusic.stop();
     else if (path === '/api/sync/canvas') await this.canvasSync.refreshNow();
     else if (path === '/api/sync/notion') await this.notionSync.refreshNow();
     else throw new InputError('Unknown action.');
     this.save();
   }
-  async dispose(): Promise<void> { clearInterval(this.tick); clearInterval(this.spotifyTick); this.cvMusic.stop(); this.camera.stop(); this.canvasSync.stop(); this.notionSync.stop(); await this.device.dispose(); }
+  async dispose(): Promise<void> { clearInterval(this.tick); clearInterval(this.spotifyTick); this.spotify.artwork.clear(); this.cvMusic.stop(); this.camera.stop(); this.canvasSync.stop(); this.notionSync.stop(); await this.device.dispose(); }
 }
 export type AppSnapshot = ReturnType<Application['snapshot']>;

@@ -5,6 +5,7 @@ import type { TaskView } from '../src/tasks/store.ts';
 import { mood, remainingTime } from '../src/pet/state.ts';
 import { renderFace, quantizeSurface } from '../src/render/face.ts';
 import { DISPLAY_SLIDES, DISPLAY_SLIDE_LABELS } from '../src/pet/slides.ts';
+import { CanvasImageLoader } from './canvas-image.ts';
 
 type Action = (path: string, body?: Record<string, unknown>) => Promise<boolean>;
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
@@ -33,6 +34,7 @@ function Face({ snapshot, now, action }: { snapshot: AppSnapshot; now: number; a
   current.current = { snapshot, now };
   useEffect(() => {
     const ctx = canvas.current!.getContext('2d', { alpha: false, willReadFrequently: true })!;
+    const artwork = new CanvasImageLoader(), spotifyLogo = new CanvasImageLoader();
     let alive = true, animation = 0, sending = false, lastUpload = 0, lastDraw = 0;
     const render = (time: number) => {
       if (!alive) return;
@@ -46,7 +48,8 @@ function Face({ snapshot, now, action }: { snapshot: AppSnapshot; now: number; a
           sensors: { source: s.diagnostics.live ? sensors.source : 'unavailable', imu: sensors.imu.status, environment: sensors.environment.status,
             temperatureC: sensors.environment.status === 'live' || sensors.environment.status === 'simulated' ? sensors.latest?.environment.temperatureC ?? null : null,
             humidityPct: sensors.environment.humidity === 'live' || sensors.environment.humidity === 'simulated' ? sensors.latest?.environment.humidityPct ?? null : null,
-            rssiDbm: sensors.rssi.status === 'live' || sensors.rssi.status === 'simulated' ? sensors.rssi.dbm : null } }, clock);
+            rssiDbm: sensors.rssi.status === 'live' || sensors.rssi.status === 'simulated' ? sensors.rssi.dbm : null } }, clock,
+          { artwork: artwork.update(s.spotify.connected ? s.spotify.artworkUrl : null, time), spotifyLogo: spotifyLogo.update('/spotify-logo.svg', time) });
         if (exact) quantizeSurface(ctx); lastDraw = time;
       }
       if (!document.hidden && s.diagnostics.connection.phase === 'ready' && !sending && time - lastUpload >= 200) {
@@ -59,7 +62,7 @@ function Face({ snapshot, now, action }: { snapshot: AppSnapshot; now: number; a
       animation = requestAnimationFrame(render);
     };
     animation = requestAnimationFrame(render);
-    return () => { alive = false; cancelAnimationFrame(animation); };
+    return () => { alive = false; cancelAnimationFrame(animation); artwork.dispose(); spotifyLogo.dispose(); };
   }, [exact]);
   const feeling = mood(snapshot.companion, now);
   return <section className="pet-card card">
@@ -120,11 +123,12 @@ function Music({ s, action, openSettings }: { s: AppSnapshot; action: Action; op
   const control = (command: string, value?: number) => void action('/api/spotify/control', { command, value });
   return <section className="music-card card"><div className="card-top"><div><span className="eyebrow">MUSIC FOR LITTLE MOMENTS</span><h2>Spotify player</h2></div><span className="pill green">{enabled ? player.playback : 'not linked'}</span></div>
     <div className="music-track"><span className="music-note">♫</span><div><strong>{player.track ?? (enabled ? 'Nothing playing yet' : 'Make a little soundtrack')}</strong><span>{player.artist ?? (enabled ? player.device ?? 'Open Spotify on a device' : 'Connect your Spotify account in Settings')}</span></div></div>
+    <a className="spotify-attribution" href={player.trackUrl ?? 'https://open.spotify.com/'} target="_blank" rel="noreferrer"><img src="/spotify-logo.svg" width="84" alt="Spotify"/><span>{player.trackUrl ? 'Open track ↗' : 'Open Spotify ↗'}</span></a>
     <div className="music-buttons"><button aria-label="Previous track" disabled={!enabled} onClick={() => control('previous')}>⏮</button><button className="music-play" aria-label={player.playback === 'playing' ? 'Pause music' : 'Play music'} disabled={!enabled} onClick={() => control('toggle')}>{player.playback === 'playing' ? 'Ⅱ' : '▶'}</button><button aria-label="Next track" disabled={!enabled} onClick={() => control('next')}>⏭</button><button aria-label="Volume down" disabled={!enabled || player.volume == null} onClick={() => control('volume', Math.max(0, (player.volume ?? 0) - 5))}>−</button><span className="music-volume">{player.volume == null ? '—' : `${Math.round(player.volume)}%`}</span><button aria-label="Volume up" disabled={!enabled || player.volume == null} onClick={() => control('volume', Math.min(100, (player.volume ?? 0) + 5))}>+</button></div>
     {!enabled && <button className="text-button" onClick={openSettings}>Set up Spotify →</button>}
     {player.message && <p className="inline-note">{player.message}</p>}
-    <div className="music-cv"><div><strong>Hand gestures · computer webcam</strong><span>Two fingers left/right: display slides · fist: play/pause · rotate: skip · circle: volume · wave: greet</span></div><button className="secondary" onClick={() => void action(cv.phase === 'live' || cv.phase === 'starting' ? '/api/cv/stop' : '/api/cv/start')}>{cv.phase === 'live' || cv.phase === 'starting' ? 'Stop gestures' : 'Start gestures'}</button></div>
-    <p className="fineprint">{cv.message}{cv.lastGesture && ` Last: ${cv.lastGesture.replace(/_/g, ' ')}.`} Computer webcam frames stay local.</p>
+    <div className="music-cv"><div><strong>Hand gestures · ESP32 camera</strong><span>Two fingers left/right: display slides · fist: play/pause · rotate: skip · circle: volume · wave: greet</span></div><button className="secondary" onClick={() => void action(cv.phase === 'live' || cv.phase === 'starting' ? '/api/cv/stop' : '/api/cv/start')}>{cv.phase === 'live' || cv.phase === 'starting' ? 'Stop gestures' : 'Start gestures'}</button></div>
+    <p className="fineprint">{cv.message}{cv.lastGesture && ` Last: ${cv.lastGesture.replace(/_/g, ' ')}.`} ESP32 frames are processed locally without recording.</p>
   </section>;
 }
 function Settings({ s, action }: { s: AppSnapshot; action: Action }) {
@@ -140,10 +144,11 @@ function Settings({ s, action }: { s: AppSnapshot; action: Action }) {
       {s.settings.canvas.baseUrl && <p className="fineprint">School: <strong>{s.settings.canvas.baseUrl}</strong></p>}
       <form onSubmit={e => void submit(e, '/api/settings/canvas')}>
         {!s.settings.canvas.baseUrl && <label>School Canvas address · needed once<input name="baseUrl" type="url" required placeholder="https://school.instructure.com"/></label>}
-        <label>Personal Canvas API token<input name="token" type="password" autoComplete="new-password" required={!s.secrets.canvasPersonalTokenSet} placeholder={s.secrets.canvasPersonalTokenSet ? 'Saved · enter a new token to replace' : 'Paste your personal access token'}/></label>
+        <label>Personal Canvas API token<input name="token" type="password" autoComplete="new-password" spellCheck={false} autoCapitalize="none" required={!s.secrets.canvasPersonalTokenSet} placeholder={s.secrets.canvasPersonalTokenSet ? 'Saved · enter a new token to replace' : 'Paste your personal access token'}/></label>
+        <p className="fineprint">Paste only the token, on one line. Keep the ~ character if present; do not add quotes or backslashes.</p>
         <button className="primary">Save API token</button>
       </form>
-      {s.settings.canvas.baseUrl && <details className="canvas-change-school"><summary>Change school Canvas address</summary><form onSubmit={e => void submit(e, '/api/settings/canvas')}><label>New school Canvas address<input name="baseUrl" type="url" required defaultValue={s.settings.canvas.baseUrl}/></label><label>API token for this school<input name="token" type="password" autoComplete="new-password" required/></label><button className="secondary">Save school and token</button></form></details>}
+      {s.settings.canvas.baseUrl && <details className="canvas-change-school"><summary>Change school Canvas address</summary><form onSubmit={e => void submit(e, '/api/settings/canvas')}><label>New school Canvas address<input name="baseUrl" type="url" required defaultValue={s.settings.canvas.baseUrl}/></label><label>API token for this school<input name="token" type="password" autoComplete="new-password" spellCheck={false} autoCapitalize="none" required/></label><button className="secondary">Save school and token</button></form></details>}
       <div className="connection-actions"><button className="secondary" disabled={s.providers.canvas.refreshing || !s.settings.canvas.baseUrl || !s.secrets.canvasPersonalTokenSet} onClick={() => void action('/api/sync/canvas')}>Refresh tasks</button><button className="text-button" disabled={!s.secrets.canvasPersonalTokenSet} onClick={() => void action('/api/settings/canvas', { clearToken: true })}>Clear token</button></div>
       <p className="inline-note">{s.providers.canvas.provider.message}</p><p className="fineprint">Create a personal access token in Canvas Account → Settings → Approved Integrations. A developer key/client ID alone will not work. Your school's address is needed once; afterward only the token is needed. Local completion never submits coursework or changes grades.</p></section>
     <section className="card settings-card"><span className="integration-logo">N</span><span className="pill lilac">{s.providers.notion.provider.health}</span><h2>Notion</h2><p>Import a shared task data source. Your progress here stays local.</p><form onSubmit={e => void submit(e, '/api/settings/notion')}><label>Data source ID<input name="dataSourceId" defaultValue={s.companion.notion.dataSourceId} placeholder="Data source UUID"/></label><label>Connection token<input name="token" type="password" autoComplete="new-password" placeholder={s.secrets.notionTokenSet ? 'Saved · leave blank to keep' : 'Notion connection token'}/></label><button className="primary">Save Notion settings</button></form><div className="connection-actions"><button className="secondary" disabled={s.providers.notion.refreshing} onClick={() => void action('/api/sync/notion')}>Refresh tasks</button><button className="text-button" onClick={() => void action('/api/settings/notion', { dataSourceId: s.companion.notion.dataSourceId, clearToken: true })}>Clear token</button></div><p className="fineprint">Share the data source with your connection. Uses its title plus optional Due (date), Category (select), and Done (checkbox) properties. Remote writes are disabled.</p></section>
@@ -154,10 +159,28 @@ function Settings({ s, action }: { s: AppSnapshot; action: Action }) {
     {message && <p role="status">{message}</p>}
   </div>;
 }
-function Camera({ s }: { s: AppSnapshot }) {
+function Camera({ s, action }: { s: AppSnapshot; action: Action }) {
   const [viewing, setViewing] = useState(false), [attempt, setAttempt] = useState(0), [failed, setFailed] = useState(false);
   const configured = !!s.settings.device.address && s.secrets.deviceTokenSet;
-  return <section className="camera-card card"><div className="card-top"><div><span className="eyebrow">A WINDOW TO YOUR DESK</span><h2>Companion camera</h2></div><span className="pill lilac">320 × 240</span></div><div className="camera-view">{viewing && !failed ? <><img key={attempt} src={`/api/camera/stream?view=${attempt}`} alt="Live ESP32 camera feed" onError={() => setFailed(true)}/>{s.camera.phase === 'loading' && <span className="camera-loading">Opening camera…</span>}</> : <div className="empty"><Icon name="camera" size={42}/><h3>{failed ? 'The camera needs a moment.' : 'Your desk, from a little closer.'}</h3><p>{failed ? s.camera.phase === 'error' ? s.camera.message : 'Could not open the camera. Check settings or close the viewer in another tab.' : 'Turn on the ESP32 camera when you’d like a look around.'}</p></div>}</div><div className="connection-actions"><button className="primary" disabled={!configured} onClick={() => { setFailed(false); setAttempt(a => a + 1); setViewing(true); }}>{failed ? 'Retry camera' : viewing ? 'Reconnect camera' : 'Open camera'}</button><button className="secondary" disabled={!viewing} onClick={() => setViewing(false)}>Stop viewing</button><span className="muted">{viewing ? s.camera.message : 'Camera off'}</span></div><p className="fineprint">One active viewer · approximately 5 fps · no recording or facial recognition. Camera video is separate from Sprout’s display.</p>{!configured && <p className="inline-note">Add your device address and token in Settings to use the camera.</p>}</section>;
+  const gesturesOn = s.cvMusic.phase === 'live' || s.cvMusic.phase === 'starting';
+  const resolution = s.camera.width && s.camera.height ? `${s.camera.width} × ${s.camera.height} native` : 'ESP32 camera';
+  return <section className="camera-card card">
+    <div className="card-top"><div><span className="eyebrow">A WINDOW TO YOUR DESK</span><h2>Companion camera</h2></div><span className="pill lilac">{resolution}</span></div>
+    <div className="camera-view">{viewing && !failed ? <>
+      <img key={attempt} src={`/api/camera/stream?view=${attempt}`} alt="Live ESP32 camera feed" onError={() => setFailed(true)}/>
+      {s.camera.phase === 'loading' && <span className="camera-loading">Opening camera…</span>}
+    </> : <div className="empty"><Icon name="camera" size={42}/><h3>{failed ? 'The camera needs a moment.' : 'Your desk, from a little closer.'}</h3><p>{failed ? s.camera.phase === 'error' ? s.camera.message : 'Could not open the camera. Check settings or close the viewer in another tab.' : 'Turn on the ESP32 camera when you’d like a look around.'}</p></div>}</div>
+    <div className="connection-actions">
+      <button className="primary" disabled={!configured} onClick={() => { setFailed(false); setAttempt(a => a + 1); setViewing(true); }}>{failed ? 'Retry camera' : viewing ? 'Reconnect camera' : 'Open camera'}</button>
+      <button className="secondary" disabled={!viewing} onClick={() => setViewing(false)}>Stop viewing</button>
+      <button className="secondary" disabled={!configured && !gesturesOn} onClick={() => void action(gesturesOn ? '/api/cv/stop' : '/api/cv/start')}>{gesturesOn ? 'Stop gestures' : 'Start gestures'}</button>
+      <span className="muted">{s.camera.message}{s.camera.phase === 'live' && s.camera.deliveredFps !== null && ` · ${s.camera.deliveredFps.toFixed(1)} fps`}</span>
+    </div>
+    <p className="fineprint">{s.cvMusic.message} Two fingers left/right: slides · fist: play/pause · rotate: skip · circle: volume · wave: greet.</p>
+    <p className="fineprint">Preview and gestures share one ESP32 feed. Stopping the preview leaves active gestures running. Video scales smoothly to fit; the badge shows captured pixels. No recording or facial recognition.</p>
+    {s.camera.width !== null && s.camera.width < 800 && <p className="inline-note">The camera is sending {s.camera.width} × {s.camera.height}. Install the updated ESP firmware for 800 × 600 capture.</p>}
+    {!configured && <p className="inline-note">Add your device address and token in Settings to use the camera.</p>}
+  </section>;
 }
 function Diagnostics({ s }: { s: AppSnapshot }) {
   const d = s.diagnostics, st = d.stream, sensors = d.sensors;
@@ -206,6 +229,6 @@ export function App() {
       {!s ? <div className="loading-card card"><Icon name="leaf" size={40}/><h2>Finding your little corner…</h2><p>Start the local host with npm run dev.</p></div> : <>
         <div hidden={page !== 'dashboard'}><div className="stats-row"><div className="stat card"><Ring done={s.progress.done} total={s.progress.total}/><div><span>Today’s little wins</span><strong>{s.progress.done}<small> / {s.progress.total} tasks</small></strong></div><span className="stat-note">Every bit counts.</span></div><div className="stat card"><span className="stat-icon lavender-icon"><Icon name="clock" size={23}/></span><div><span>Time well spent</span><strong>{s.companion.timer.sessions * 25}<small> min focused</small></strong></div></div><div className="stat card"><span className="stat-icon peach-icon"><Icon name="heart" size={23}/></span><div><span>A growing friendship</span><strong>{s.companion.pet.xp}<small> sprout points</small></strong></div></div></div>
         <div className="dashboard-grid"><Face snapshot={s} now={now} action={action}/><div className="right-column"><Tasks s={s} action={action}/><Focus s={s} now={now} action={action}/><Music s={s} action={action} openSettings={() => setPage('settings')}/><div className="gentle-note"><span>✦</span><p>You don’t have to do it all today.<br/><strong>Just the next little thing.</strong></p><span>✧</span></div></div></div></div>
-        {page === 'camera' && <Camera s={s}/>}{page === 'settings' && <Settings s={s} action={action}/>}<Diagnostics s={s}/>
+        {page === 'camera' && <Camera s={s} action={action}/>}{page === 'settings' && <Settings s={s} action={action}/>}<Diagnostics s={s}/>
       </>}<footer>{BRAND.tagline}<span>Made for your desk, at your pace.</span></footer></main></div></>;
 }

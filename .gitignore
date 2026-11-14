@@ -14,4 +14,5 @@ settings.json.tmp-*
 !.env.example
 artifacts/
 __pycache__/
+.venv/
 *.py[cod]
