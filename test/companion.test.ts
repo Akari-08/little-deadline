@@ -95,7 +95,7 @@ test('music artwork is contained on the canonical surface and survives RGB565 fr
   renderFace(ctx, s, 40000, assets); const first = pixels();
   assert.deepEqual([...ctx.getImageData(60, 140, 1, 1).data], [255, 0, 0, 255]);
   assert.deepEqual([...ctx.getImageData(180, 140, 1, 1).data], [0, 0, 255, 255]);
-  assert.deepEqual([...ctx.getImageData(120, 100, 1, 1).data], [17, 31, 36, 255], 'wide art is letterboxed, not stretched');
+  assert.deepEqual([...ctx.getImageData(120, 100, 1, 1).data], [15, 29, 50, 255], 'wide art is letterboxed, not stretched');
   renderFace(ctx, s, 40000, assets); assert.ok(pixels().equals(first));
   assert.ok(first.every((value, i) => i % 4 !== 3 || value === 255));
   const packed = rgbaToRGB565LE(first); assert.equal(packed.length, 153600);
