@@ -120,7 +120,9 @@ function describeProvider(label: string, status: SyncStatus, ctx: AssistantConte
   const message = p.message ? ` Message: ${JSON.stringify(p.message)}.` : '';
   switch (p.health) {
     case 'unconfigured':
-      return `- ${label}: NOT CONFIGURED. There is no ${label} data; do not guess or invent ${label} items.`;
+      return label === 'Canvas LMS'
+        ? `- Canvas LMS: NOT CONNECTED (no Canvas API token). There is no Canvas data; do not guess or invent Canvas items. If the user asks about assignments, deadlines, due dates, courses or coursework, tell them to add their Canvas API token in Settings → Canvas LMS so you can see their assignments.`
+        : `- ${label}: NOT CONFIGURED. There is no ${label} data; do not guess or invent ${label} items.`;
     case 'ready':
       return `- ${label}: connected; ${synced}.${status.refreshing ? ' A refresh is in progress.' : ''}`;
     case 'auth-required':

@@ -70,6 +70,13 @@ export class NotificationCenter {
     };
   }
 
+  /** Remove every notification about a provider's items (its credentials were removed). */
+  forgetProvider(provider: 'canvas' | 'notion'): void {
+    const prefix = `${provider}:`;
+    this.state.items = this.state.items.filter(item => item.provider !== provider && !item.taskIds.some(id => id.startsWith(prefix)));
+    this.persist(false);
+  }
+
   /** `/api/notifications/<subpath>`. Throws Error with a user-facing message on bad input. */
   action(subpath: string, body: Record<string, unknown>): void {
     if (subpath === 'read') {
