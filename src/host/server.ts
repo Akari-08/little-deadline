@@ -4,6 +4,7 @@ import { resolve, extname, sep } from 'node:path';
 import type { ViteDevServer } from 'vite';
 import { Application, InputError, validateLanAddress } from './application.ts';
 import { SpotifyError } from '../spotify/service.ts';
+import { serveAssistantChat } from '../assistant/http.ts';
 
 async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   const chunks: Buffer[] = []; let size = 0;
@@ -54,6 +55,16 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
       }
       if (req.method !== 'POST' || req.headers['x-lil-deadline'] !== '1') { json(res, 403, { error: 'Expected a local app request.' }); return; }
       try {
+        if (url.pathname === '/api/assistant/chat') {
+          // Streams Server-Sent Events. requestTimeout only bounds receiving the request body,
+          // so a long answer is not cut off once the body has arrived.
+          if (req.headers['content-type'] !== 'application/json') throw new InputError('Expected JSON.');
+          let body: unknown;
+          try { body = JSON.parse((await readBody(req, 65_536)).toString('utf8')); }
+          catch (error) { throw error instanceof InputError ? error : new InputError('Invalid request.'); }
+          await serveAssistantChat(app.assistant, body, res);
+          return;
+        }
         if (url.pathname === '/api/spotify/authorize') { json(res, 200, { url: app.spotify.authorizeUrl(`http://${req.headers.host}`) }); return; }
         if (url.pathname === '/api/frame') {
           if (uploading) { json(res, 429, { error: 'A frame is already arriving.' }); return; }

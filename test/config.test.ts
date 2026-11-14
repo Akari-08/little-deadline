@@ -144,7 +144,7 @@ test('Canvas secrets are stored beside the device token without clobbering it', 
     storage.updateSettings(s => { s.canvas.baseUrl = 'https://canvas.example.edu'; });
     assert.equal(storage.loadDeviceToken(), TEST_TOKEN);
     assert.equal(storage.loadCanvasPersonalToken(), 'canvas-test-token-0000');
-    assert.deepEqual(storage.describeSecrets(), { deviceTokenSet: true, canvasPersonalTokenSet: true });
+    assert.deepEqual(storage.describeSecrets(), { deviceTokenSet: true, canvasPersonalTokenSet: true, anthropicApiKeySet: false });
     const settingsText = readFileSync(storage.settingsPath, 'utf8');
     for (const secret of [TEST_TOKEN, 'canvas-test-token-0000']) {
       assert.ok(!settingsText.includes(secret), 'no secret in settings.json');

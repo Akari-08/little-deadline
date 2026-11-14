@@ -174,6 +174,25 @@ data source UUID plus connection token. It reads the title property and optional
 ID is distinct from a database ID. Refreshes occur about every 15 minutes, and
 failures retain the last good snapshot. See [Notion details](docs/notion.md).
 
+**Ask Sprout (Claude study assistant):** open **Settings → Ask Sprout**, paste a
+Claude API key from [console.anthropic.com](https://console.anthropic.com/) and
+save it. The key is stored only in the host's private `secrets.json`; the
+browser only learns whether a key is saved. Then open **Ask Sprout** in the
+sidebar and type a question, or pick a suggested one such as *"What's my most
+urgent assignment right now?"* Each question is sent to Anthropic's API along
+with your task list from every provider (local, Canvas LMS, Notion), so answers
+can use your real deadlines. Device tokens and other credentials are never sent.
+The assistant is read-only: it cannot add, complete or submit anything. See
+[assistant details](docs/assistant.md).
+
+**Notifications:** the bell in the header collects deadline reminders, such as
+items due within 24 hours and 2 hours, overdue items, new Canvas/Notion
+assignments, changed due dates, busy-week warnings, a morning digest, sync
+problems and finished focus sessions. The most urgent one also appears as a
+banner on the 240×320 display. Choose rules, lead times and quiet hours under
+**Settings → Notifications**, and enable desktop notifications there. See
+[notification details](docs/notifications.md).
+
 ### Checks
 
 ```powershell

@@ -9,6 +9,8 @@ export interface FaceState {
   tasks?: readonly { title: string; done: boolean }[];
   music?: { connected: boolean; playback: string; track: string | null; artist: string | null; volume: number | null };
   sensors?: { source: string; imu: string; environment: string; temperatureC: number | null; humidityPct: number | null; rssiDbm: number | null };
+  /** Most urgent notification banner text (from NotificationCenter.status().banner), or null. */
+  alert?: string | null;
 }
 const sprite = [
   '        gg       ',
@@ -45,6 +47,15 @@ export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now:
     let short = value;
     while (short.length > 2 && ctx.measureText(short + '..').width > width) short = short.slice(0, -1);
     return short + '..';
+  };
+  // Notification banner: opaque strip over the footer line, drawn last on every slide.
+  const banner = () => {
+    if (!state.alert) return;
+    const overdue = /^OVERDUE/.test(state.alert);
+    ctx.fillStyle = overdue ? '#e8a48c' : '#e0c58b'; ctx.fillRect(6, 293, 228, 24);
+    ctx.fillStyle = '#19282d'; ctx.fillRect(13, 299, 3, 9); ctx.fillRect(13, 310, 3, 3);
+    const label = fit(state.alert, 202, 11);
+    ctx.fillStyle = '#16211d'; ctx.font = '600 11px monospace'; ctx.textAlign = 'left'; ctx.fillText(label, 22, 309);
   };
   const slide = s.displaySlide;
   if (slide !== 'pet') {
@@ -111,7 +122,7 @@ export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now:
       });
       text(`ENV ${sensors?.environment ?? 'unavailable'}`, 120, 302, 10, '#92aba0', 'center');
     }
-    ctx.restore(); return;
+    banner(); ctx.restore(); return;
   }
   text(BRAND.petName.toUpperCase(), 16, 25, 12, '#d2e8d7');
   text(`LV ${1 + Math.floor(s.pet.xp / 100)}`, 224, 25, 10, '#a6b9a9', 'right');
@@ -147,6 +158,7 @@ export function renderFace(ctx: CanvasRenderingContext2D, state: FaceState, now:
   const seconds = Math.ceil(remainingTime(s, now) / 1000);
   text(s.timer.startedAt !== null ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} focus` : state.status, 120, 309, 9, '#92aba0', 'center');
   text(`1 / ${DISPLAY_SLIDES.length}`, 224, 309, 9, '#92aba0', 'right');
+  banner();
   ctx.restore();
 }
 /** Optional RGB565-quantized preview; modifies the canonical surface before upload. */

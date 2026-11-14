@@ -7,7 +7,8 @@
  * and replaced with defaults; a corrupt secrets file is deleted (no stray credential copies).
  *
  * Secrets held here (host process only — never sent to UI code, the ESP32, logs or URLs):
- * the ESP32 device token, Canvas LMS and Notion tokens, and Spotify OAuth tokens.
+ * the ESP32 device token, Canvas LMS and Notion tokens, Spotify OAuth tokens, and the
+ * Anthropic (Claude) API key used by the study assistant.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -45,6 +46,7 @@ export interface Secrets {
   spotifyAccessToken?: string | null;
   spotifyRefreshToken?: string | null;
   spotifyExpiresAt?: number | null;
+  anthropicApiKey?: string | null;
   schemaVersion: typeof SECRETS_SCHEMA_VERSION;
   deviceToken: string | null;
   canvasPersonalToken: string | null;
@@ -54,6 +56,7 @@ export interface Secrets {
 export interface SecretsSummary {
   deviceTokenSet: boolean;
   canvasPersonalTokenSet: boolean;
+  anthropicApiKeySet: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -136,6 +139,7 @@ function normalizeSecrets(raw: unknown): Secrets {
   secrets.notionToken = str(raw.notionToken);
   secrets.spotifyAccessToken = str(raw.spotifyAccessToken);
   secrets.spotifyRefreshToken = str(raw.spotifyRefreshToken);
+  secrets.anthropicApiKey = str(raw.anthropicApiKey);
   secrets.spotifyExpiresAt = typeof raw.spotifyExpiresAt === 'number' && Number.isFinite(raw.spotifyExpiresAt) ? raw.spotifyExpiresAt : null;
   return secrets;
 }
@@ -160,6 +164,21 @@ export class AppStorage {
 
   saveTasksFile(value: unknown): void {
     this.writeJson(this.tasksPath, value, 0o644);
+  }
+
+  /** Notification feed + preferences (ordinary app state, not secret). */
+  loadNotifications(): unknown { return this.readJson(join(this.dir, 'notifications.json'), Number.MAX_SAFE_INTEGER); }
+  saveNotifications(value: unknown): void { this.writeJson(join(this.dir, 'notifications.json'), value, 0o644); }
+
+  // --- Anthropic API key (study assistant; host-side only, never sent to UI code) ---
+  loadAnthropicApiKey(): string | null { return this.loadSecrets().anthropicApiKey ?? null; }
+  saveAnthropicApiKey(key: string | null): void {
+    if (key !== null) {
+      key = key.trim();
+      const error = checkApiCredential(key, 'Claude API key');
+      if (error) throw new Error(error);
+    }
+    this.updateSecrets(secrets => { secrets.anthropicApiKey = key; });
   }
 
   loadCompanion(): unknown { return this.readJson(join(this.dir, 'companion.json'), 1); }
@@ -240,6 +259,7 @@ export class AppStorage {
     return {
       deviceTokenSet: this.loadDeviceToken() !== null,
       canvasPersonalTokenSet: secrets.canvasPersonalToken !== null,
+      anthropicApiKeySet: !!secrets.anthropicApiKey,
     };
   }
 
