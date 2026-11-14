@@ -14,6 +14,12 @@ async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
 function json(res: ServerResponse, code: number, body: unknown): void {
   res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
 }
+/** Hostname suffixes served by ngrok tunnels (subdomains only). */
+export const NGROK_HOST_SUFFIXES = ['.ngrok-free.app', '.ngrok-free.dev', '.ngrok.app', '.ngrok.dev', '.ngrok.io'];
+export function isNgrokHost(host: string): boolean {
+  const name = host.toLowerCase().replace(/:443$/, '');
+  return /^[a-z0-9.-]+$/.test(name) && NGROK_HOST_SUFFIXES.some(suffix => name.endsWith(suffix) && name.length > suffix.length);
+}
 export function createAppServer(app: Application, options: { dev?: ViteDevServer; root?: string } = {}) {
   const server = createServer((req, res) => { void handle(req, res).catch(() => { if (!res.headersSent) json(res, 500, { error: 'The local host could not complete this request.' }); else res.destroy(); }); });
   server.requestTimeout = 15_000; server.headersTimeout = 10_000;
@@ -21,8 +27,12 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const port = (server.address() as { port: number }).port;
     const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
-    if (!allowed.has(req.headers.host ?? '')) { json(res, 403, { error: 'Local clients only.' }); return; }
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+    const host = req.headers.host ?? '';
+    // ngrok tunnels are allowed with no login (owner's choice); any other unknown Host is still refused.
+    const tunnel = isNgrokHost(host);
+    if (!allowed.has(host) && !tunnel) { json(res, 403, { error: 'Local clients only.' }); return; }
+    const publicOrigin = `${tunnel ? 'https' : 'http'}://${host}`;
+    const url = new URL(req.url ?? '/', publicOrigin);
     // Spotify redirects the browser from accounts.spotify.com. That navigation is
     // cross-site by design; the callback validates the one-time OAuth state.
     const spotifyCallback = req.method === 'GET' && url.pathname === '/api/spotify/callback';
@@ -30,13 +40,13 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
     // only a top-level GET of the app shell; APIs, fetches and embeds stay protected.
     const dashboardNavigation = req.method === 'GET' && url.pathname === '/' &&
       req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document';
-    if (!spotifyCallback && !dashboardNavigation && ((req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) || req.headers['sec-fetch-site'] === 'cross-site')) { json(res, 403, { error: 'Origin not permitted.' }); return; }
+    if (!spotifyCallback && !dashboardNavigation && ((req.headers.origin && req.headers.origin !== publicOrigin) || req.headers['sec-fetch-site'] === 'cross-site')) { json(res, 403, { error: 'Origin not permitted.' }); return; }
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     if (url.pathname.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
       if (spotifyCallback) {
-        try { await app.spotify.callback(url.searchParams, `http://${req.headers.host}`); res.writeHead(303, { Location: '/?spotify=connected', 'Referrer-Policy': 'no-referrer' }).end(); }
+        try { await app.spotify.callback(url.searchParams, publicOrigin); res.writeHead(303, { Location: '/?spotify=connected', 'Referrer-Policy': 'no-referrer' }).end(); }
         catch { res.writeHead(303, { Location: '/?spotify=error', 'Referrer-Policy': 'no-referrer' }).end(); }
         return;
       }
@@ -65,7 +75,7 @@ export function createAppServer(app: Application, options: { dev?: ViteDevServer
           await serveAssistantChat(app.assistant, body, res);
           return;
         }
-        if (url.pathname === '/api/spotify/authorize') { json(res, 200, { url: app.spotify.authorizeUrl(`http://${req.headers.host}`) }); return; }
+        if (url.pathname === '/api/spotify/authorize') { json(res, 200, { url: app.spotify.authorizeUrl(publicOrigin) }); return; }
         if (url.pathname === '/api/frame') {
           if (uploading) { json(res, 429, { error: 'A frame is already arriving.' }); return; }
           if (req.headers['content-type'] !== 'application/octet-stream') throw new InputError('Expected binary pixels.');
