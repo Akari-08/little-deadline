@@ -8,6 +8,7 @@
  *
  * Secrets held here (host process only — never sent to UI code, the ESP32, logs or URLs):
  * the ESP32 device token, Canvas LMS and Notion tokens, and Spotify OAuth tokens.
+ * (The study assistant's app-wide Gemini key lives in the gitignored .env, not here.)
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -161,6 +162,10 @@ export class AppStorage {
   saveTasksFile(value: unknown): void {
     this.writeJson(this.tasksPath, value, 0o644);
   }
+
+  /** Notification feed + preferences (ordinary app state, not secret). */
+  loadNotifications(): unknown { return this.readJson(join(this.dir, 'notifications.json'), Number.MAX_SAFE_INTEGER); }
+  saveNotifications(value: unknown): void { this.writeJson(join(this.dir, 'notifications.json'), value, 0o644); }
 
   loadCompanion(): unknown { return this.readJson(join(this.dir, 'companion.json'), 1); }
   saveCompanion(value: unknown): void { this.writeJson(join(this.dir, 'companion.json'), value, 0o644); }

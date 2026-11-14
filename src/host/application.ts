@@ -9,13 +9,16 @@ import { createCanvasAuth } from '../canvas/create-auth.ts';
 import { parseCanvasBaseUrl } from '../canvas/base-url.ts';
 import { NotionTaskProvider } from '../notion/provider.ts';
 import { CameraProxy } from '../camera/proxy.ts';
-import { normalizeCompanion, celebrate, settleTimer, timerAction } from '../pet/state.ts';
+import { normalizeCompanion, celebrate, settleTimer, timerAction, remainingTime } from '../pet/state.ts';
 import { parseDeviceAddress } from '../device/address.ts';
 import { checkDeviceToken } from '../device/token.ts';
 import { SpotifyService, type SpotifyAction } from '../spotify/service.ts';
 import { CvMusicBridge } from '../cv/music-bridge.ts';
 import { isDisplaySlide, moveDisplaySlide } from '../pet/slides.ts';
 import type { RenderedFrame } from '../device/streamer.ts';
+import type { TaskView } from '../tasks/store.ts';
+import { NotificationCenter } from '../notifications/center.ts';
+import { Assistant, type AssistantContext } from '../assistant/service.ts';
 
 export class InputError extends Error {}
 const string = (v: unknown) => typeof v === 'string' ? v : '';
@@ -44,6 +47,8 @@ export class Application {
   readonly companion;
   readonly canvasSync: TaskSync;
   readonly notionSync: TaskSync;
+  readonly notifications: NotificationCenter;
+  readonly assistant: Assistant;
   readonly instanceId = randomUUID();
   private frame: RenderedFrame | null = null;
   private frameAt = 0;
@@ -51,8 +56,20 @@ export class Application {
   private owner: string | null = null;
   private tick: ReturnType<typeof setInterval>;
   private spotifyTick: ReturnType<typeof setInterval>;
-  constructor(storage = new AppStorage()) {
+  private notificationTick: ReturnType<typeof setInterval>;
+  /**
+   * @param options.geminiApiKey App-wide Gemini key from the host environment (.env), shared by
+   *   every user of this host — users never enter their own.
+   * @param options.geminiModel Optional model override (GEMINI_MODEL).
+   */
+  constructor(storage = new AppStorage(), options: { geminiApiKey?: string | null; geminiModel?: string | null } = {}) {
     this.storage = storage;
+    const rawKey = options.geminiApiKey?.trim() ?? '';
+    const geminiKey = rawKey && !checkApiCredential(rawKey, 'GEMINI_API_KEY') ? rawKey : null;
+    if (rawKey && !geminiKey) storage.warnings.push('GEMINI_API_KEY in .env is not a valid key; Ask Sprout is disabled until it is fixed.');
+    const rawModel = options.geminiModel?.trim() ?? '';
+    const geminiModel = /^[a-z0-9][a-z0-9.\-]{1,80}$/i.test(rawModel) ? rawModel : undefined;
+    if (rawModel && !geminiModel) storage.warnings.push('GEMINI_MODEL in .env is not a valid model name; using the default model.');
     this.companion = normalizeCompanion(storage.loadCompanion());
     this.tasks = new TaskStore({ persistence: { load: () => storage.loadTasksFile(), save: value => storage.saveTasksFile(value) } });
     this.tasks.on('completed', ({ ids }) => { celebrate(this.companion, Date.now(), ids.length * 10); this.save(); });
@@ -69,12 +86,39 @@ export class Application {
       provider: new CanvasTaskProvider({ loadSettings: () => storage.loadSettings().canvas, createAuth: () => createCanvasAuth(storage) }) });
     this.notionSync = new TaskSync({ store: this.tasks, intervalMs: () => 15 * 60_000,
       provider: new NotionTaskProvider(() => ({ token: storage.loadNotionToken(), dataSourceId: this.companion.notion.dataSourceId })) });
+    // [notifications] deadline/event notifications, evaluated on the host.
+    this.notifications = new NotificationCenter({ load: () => storage.loadNotifications(), save: value => storage.saveNotifications(value) });
+    this.tasks.on('changed', () => this.refreshNotifications());
+    this.canvasSync.on('status', () => this.refreshNotifications()); this.notionSync.on('status', () => this.refreshNotifications());
+    this.notificationTick = setInterval(() => this.refreshNotifications(), 30_000);
+    this.refreshNotifications();
+    // [assistant] Gemini-backed study assistant; the app-wide key stays in host memory only.
+    this.assistant = new Assistant({ apiKey: geminiKey, model: geminiModel, context: () => this.assistantContext() });
     this.canvasSync.start(); this.notionSync.start();
-    this.tick = setInterval(() => { if (settleTimer(this.companion, Date.now())) this.save(); }, 500);
+    this.tick = setInterval(() => { if (settleTimer(this.companion, Date.now())) { this.save(); this.refreshNotifications(); } }, 500);
     this.spotifyTick = setInterval(() => { if (this.spotify.status().connected) void this.spotify.refreshPlayback(); }, 10_000);
     this.save();
   }
   save(): void { this.storage.saveCompanion(this.companion); }
+  /** Tasks from every provider, regardless of which one the dashboard is showing. */
+  allTasks(): TaskView[] { return (['mock', 'canvas', 'notion'] as const).flatMap(p => this.tasks.list(p)); }
+  refreshNotifications(): void {
+    this.notifications.update({ now: Date.now(), tasks: this.allTasks(), focusSessions: this.companion.timer.sessions,
+      providers: { canvas: this.canvasSync.status(), notion: this.notionSync.status() } });
+  }
+  assistantContext(): AssistantContext {
+    const now = Date.now(), d = this.device.diagnostics(), sensors = d.sensors, spotify = this.spotify.status();
+    const envOk = sensors.environment.status === 'live' || sensors.environment.status === 'simulated';
+    const humOk = sensors.environment.humidity === 'live' || sensors.environment.humidity === 'simulated';
+    return { now, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, tasks: this.allTasks(),
+      providers: { canvas: this.canvasSync.status(), notion: this.notionSync.status() },
+      focus: { sessions: this.companion.timer.sessions, running: this.companion.timer.startedAt !== null,
+        remainingMs: remainingTime(this.companion, now), selectedTaskId: this.companion.selectedId },
+      music: { connected: spotify.connected, track: spotify.track, artist: spotify.artist },
+      environment: { temperatureC: envOk ? sensors.latest?.environment.temperatureC ?? null : null,
+        humidityPct: humOk ? sensors.latest?.environment.humidityPct ?? null : null,
+        source: d.live ? sensors.source : 'unavailable' } };
+  }
   snapshot() {
     const settings = this.storage.loadSettings(), diagnostics = this.device.diagnostics();
     return { instanceId: this.instanceId, serverNow: Date.now(), companion: this.companion, tasks: this.tasks.list(this.companion.provider),
@@ -82,6 +126,7 @@ export class Application {
       secrets: { ...this.storage.describeSecrets(), notionTokenSet: !!this.storage.loadNotionToken() },
       diagnostics, camera: this.camera.status(), providers: { canvas: this.canvasSync.status(), notion: this.notionSync.status() },
       spotify: this.spotify.status(), cvMusic: this.cvMusic.status(),
+      notifications: this.notifications.status(Date.now()), assistant: this.assistant.status(),
       render: { fresh: this.frame !== null && performance.now() - this.frameAt < 1500, owner: this.owner },
     };
   }
@@ -171,11 +216,15 @@ export class Application {
       const address = await validateLanAddress(this.storage.loadSettings().device.address);
       try { this.cvMusic.start(address, this.storage.loadDeviceToken()); } catch (error) { throw new InputError(error instanceof Error ? error.message : 'Could not start music gestures.'); }
     } else if (path === '/api/cv/stop') this.cvMusic.stop();
+    else if (path.startsWith('/api/notifications/')) {
+      try { this.notifications.action(path.slice('/api/notifications/'.length), body); }
+      catch (error) { throw new InputError(error instanceof Error ? error.message : 'Notification change failed.'); }
+    }
     else if (path === '/api/sync/canvas') await this.canvasSync.refreshNow();
     else if (path === '/api/sync/notion') await this.notionSync.refreshNow();
     else throw new InputError('Unknown action.');
     this.save();
   }
-  async dispose(): Promise<void> { clearInterval(this.tick); clearInterval(this.spotifyTick); this.spotify.artwork.clear(); this.cvMusic.stop(); this.camera.stop(); this.canvasSync.stop(); this.notionSync.stop(); await this.device.dispose(); }
+  async dispose(): Promise<void> { clearInterval(this.tick); clearInterval(this.notificationTick); clearInterval(this.spotifyTick); this.spotify.artwork.clear(); this.cvMusic.stop(); this.camera.stop(); this.canvasSync.stop(); this.notionSync.stop(); await this.device.dispose(); }
 }
 export type AppSnapshot = ReturnType<Application['snapshot']>;
