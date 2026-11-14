@@ -67,6 +67,19 @@ export class TaskSync extends Emitter<{ status: SyncStatus }> {
     void this.refreshNow();
   }
 
+  /**
+   * Credentials were removed: abort any in-flight fetch (its result is discarded) and delete
+   * every stored copy of this provider's data. Automatic refreshes resume via start().
+   */
+  forget(): void {
+    this.controller?.abort(new Error('Credentials removed'));
+    this.clearTimer();
+    this.failures = 0;
+    this.provider.forget?.();
+    if (this.provider.id !== 'mock') this.store.forgetProvider(this.provider.id);
+    this.emitStatus();
+  }
+
   stop(): void {
     this.running = false;
     this.controller?.abort(new Error('Refresh stopped'));

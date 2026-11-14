@@ -254,3 +254,99 @@ test('HTTP binary frames reach simulated device; reconnect discards old frames a
     await new Promise(r => setTimeout(r, 300)); assert.equal(device.stats.authenticated, 2);
   } finally { await h.close(); await device.stop(); }
 });
+
+const plannerAssignment = {
+  context_type: 'Course', course_id: 101, context_name: 'CHEM 101', plannable_id: 5001, plannable_type: 'assignment',
+  plannable: { id: 5001, name: 'Secret Lab Report', due_at: new Date(Date.now() + 2 * 3600_000).toISOString(), points_possible: 10 },
+  planner_override: null,
+  submissions: { excused: false, graded: false, late: false, missing: false, needs_grading: false, with_feedback: false },
+  html_url: '/courses/101/assignments/5001',
+};
+
+test('clearing the Canvas token removes every copy of the Canvas data, including what Ask Sprout sees', async () => {
+  const h = await harness();
+  const mock = await startMockCanvas({ handler: r => ({ body: r.path === '/api/v1/planner/items' ? [plannerAssignment] : [] }) });
+  try {
+    assert.equal((await h.post('/api/settings/canvas', { baseUrl: mock.origin, token: FAKE_CANVAS_TOKEN })).status, 200);
+    await waitFor(() => h.app.allTasks().some(t => t.title === 'Secret Lab Report'));
+    await waitFor(() => !h.app.canvasSync.status().refreshing);
+    h.app.refreshNotifications();
+    assert.ok(h.app.notifications.status(Date.now()).items.some(i => i.provider === 'canvas'), 'a due-soon Canvas reminder exists before clearing');
+    assert.equal((await h.post('/api/provider', { provider: 'canvas' })).status, 200);
+
+    const cleared = await h.post('/api/settings/canvas', { clearToken: true });
+    assert.equal(cleared.status, 200);
+    assert.ok(!(await cleared.text()).includes('Secret Lab Report'), 'dashboard state has no Canvas tasks');
+    assert.ok(!h.app.allTasks().some(t => t.provider === 'canvas'));
+    assert.equal(h.app.canvasSync.status().snapshot, null);
+    assert.equal(h.app.canvasSync.status().provider.health, 'unconfigured');
+    assert.ok(!JSON.stringify(h.storage.loadTasksFile()).includes('Secret Lab Report'), 'snapshot deleted from disk');
+    assert.ok(!JSON.stringify(h.storage.loadNotifications()).includes('Secret Lab Report'), 'Canvas reminders deleted');
+    const context = h.app.assistantContext();
+    assert.ok(!context.tasks.some(t => t.provider === 'canvas'), 'Ask Sprout gets no Canvas tasks');
+    assert.equal(context.providers.canvas.provider.health, 'unconfigured');
+  } finally { await h.close(); await mock.close(); }
+});
+
+test('Canvas data saved without a token (from before this fix) is purged on startup', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-host-'));
+  const storage = new AppStorage(dir);
+  const first = new Application(storage);
+  first.tasks.applySnapshot({ provider: 'canvas', fetchedAt: new Date().toISOString(), tasks: [{
+    key: 'assignment:5001', title: 'Leftover Essay', kind: 'assignment', course: { id: '101', name: 'ENG' }, dueAt: new Date(Date.now() + 3600_000).toISOString(),
+    allDay: false, points: 10, url: null, status: { submitted: false, markedDone: false, excused: false, graded: false, missing: false, late: false },
+  } as never] });
+  await first.dispose();
+  assert.ok(JSON.stringify(storage.loadTasksFile()).includes('Leftover Essay'));
+  const app = new Application(storage);
+  try {
+    assert.ok(!JSON.stringify(storage.loadTasksFile()).includes('Leftover Essay'));
+    assert.ok(!app.assistantContext().tasks.some(t => t.provider === 'canvas'));
+  } finally { await app.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+const notionTask = (title: string) => ({
+  key: 'page:abc', title, kind: 'other', course: null, dueAt: new Date(Date.now() + 2 * 3600_000).toISOString(),
+  allDay: false, points: null, url: null, status: { submitted: false, markedDone: false, excused: false, graded: false, missing: false, late: false },
+}) as never;
+
+test('clearing the Notion token removes every copy of the Notion data, including what Ask Sprout sees', async () => {
+  const realFetch = globalThis.fetch;
+  // The Notion provider captures fetch at construction; never reach api.notion.com from tests.
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input).startsWith('https://api.notion.com/') ? new Response('{}', { status: 401 }) : realFetch(input, init)) as typeof fetch;
+  const h = await harness();
+  globalThis.fetch = realFetch;
+  const id = randomUUID();
+  try {
+    h.storage.saveNotionToken('ntn_' + 'a'.repeat(46));
+    h.app.companion.notion.dataSourceId = id;
+    h.app.tasks.applySnapshot({ provider: 'notion', fetchedAt: new Date().toISOString(), tasks: [notionTask('Private Notion Plan')] });
+    h.app.refreshNotifications();
+    assert.ok(h.app.assistantContext().tasks.some(t => t.title === 'Private Notion Plan'));
+    assert.ok(h.app.notifications.status(Date.now()).items.some(i => i.provider === 'notion'));
+
+    const cleared = await h.post('/api/settings/notion', { dataSourceId: id, clearToken: true });
+    assert.equal(cleared.status, 200);
+    assert.ok(!(await cleared.text()).includes('Private Notion Plan'));
+    assert.ok(!h.app.allTasks().some(t => t.provider === 'notion'));
+    assert.equal(h.app.notionSync.status().snapshot, null);
+    assert.ok(!JSON.stringify(h.storage.loadTasksFile()).includes('Private Notion Plan'), 'snapshot deleted from disk');
+    assert.ok(!JSON.stringify(h.storage.loadNotifications()).includes('Private Notion Plan'), 'Notion reminders deleted');
+    assert.ok(!h.app.assistantContext().tasks.some(t => t.provider === 'notion'), 'Ask Sprout gets no Notion tasks');
+  } finally { await h.close(); }
+});
+
+test('Notion data saved without a token is purged on startup', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-host-'));
+  const storage = new AppStorage(dir);
+  const first = new Application(storage);
+  first.tasks.applySnapshot({ provider: 'notion', fetchedAt: new Date().toISOString(), tasks: [notionTask('Leftover Notion Page')] });
+  await first.dispose();
+  assert.ok(JSON.stringify(storage.loadTasksFile()).includes('Leftover Notion Page'));
+  const app = new Application(storage);
+  try {
+    assert.ok(!JSON.stringify(storage.loadTasksFile()).includes('Leftover Notion Page'));
+    assert.ok(!app.assistantContext().tasks.some(t => t.provider === 'notion'));
+  } finally { await app.dispose(); rmSync(dir, { recursive: true, force: true }); }
+});

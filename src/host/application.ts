@@ -17,6 +17,9 @@ import { CvMusicBridge } from '../cv/music-bridge.ts';
 import { isDisplaySlide, moveDisplaySlide } from '../pet/slides.ts';
 import type { RenderedFrame } from '../device/streamer.ts';
 import type { TaskView } from '../tasks/store.ts';
+import type { TaskProviderId } from '../tasks/types.ts';
+type RemoteProvider = Exclude<TaskProviderId, 'mock'>;
+const REMOTE_PROVIDERS: readonly RemoteProvider[] = ['canvas', 'notion'];
 import { NotificationCenter } from '../notifications/center.ts';
 import { Assistant, type AssistantContext } from '../assistant/service.ts';
 
@@ -91,6 +94,8 @@ export class Application {
     this.tasks.on('changed', () => this.refreshNotifications());
     this.canvasSync.on('status', () => this.refreshNotifications()); this.notionSync.on('status', () => this.refreshNotifications());
     this.notificationTick = setInterval(() => this.refreshNotifications(), 30_000);
+    // Data saved before a token was removed (e.g. by an older version) is purged at start.
+    for (const provider of REMOTE_PROVIDERS) if (!this.connected(provider)) this.forgetProvider(provider);
     this.refreshNotifications();
     // [assistant] Gemini-backed study assistant; the app-wide key stays in host memory only.
     this.assistant = new Assistant({ apiKey: geminiKey, model: geminiModel, context: () => this.assistantContext() });
@@ -101,7 +106,19 @@ export class Application {
   }
   save(): void { this.storage.saveCompanion(this.companion); }
   /** Tasks from every provider, regardless of which one the dashboard is showing. */
-  allTasks(): TaskView[] { return (['mock', 'canvas', 'notion'] as const).flatMap(p => this.tasks.list(p)); }
+  allTasks(): TaskView[] { return (['mock', 'canvas', 'notion'] as const).flatMap(p => this.visibleTasks(p)); }
+  /** Remote data is never exposed without that provider's credentials, even if a stale copy were left over. */
+  private visibleTasks(provider: TaskProviderId): TaskView[] {
+    return provider !== 'mock' && !this.connected(provider) ? [] : this.tasks.list(provider);
+  }
+  private syncFor(provider: RemoteProvider): TaskSync { return provider === 'canvas' ? this.canvasSync : this.notionSync; }
+  private connected(provider: RemoteProvider): boolean { return this.syncFor(provider).status().provider.health !== 'unconfigured'; }
+  /** Remove every stored trace of a provider's data (token cleared, or school / data source changed). */
+  private forgetProvider(provider: RemoteProvider): void {
+    this.syncFor(provider).forget();
+    this.notifications.forgetProvider(provider);
+    if (this.companion.selectedId?.startsWith(`${provider}:`)) this.companion.selectedId = null;
+  }
   refreshNotifications(): void {
     this.notifications.update({ now: Date.now(), tasks: this.allTasks(), focusSessions: this.companion.timer.sessions,
       providers: { canvas: this.canvasSync.status(), notion: this.notionSync.status() } });
@@ -121,7 +138,7 @@ export class Application {
   }
   snapshot() {
     const settings = this.storage.loadSettings(), diagnostics = this.device.diagnostics();
-    return { instanceId: this.instanceId, serverNow: Date.now(), companion: this.companion, tasks: this.tasks.list(this.companion.provider),
+    return { instanceId: this.instanceId, serverNow: Date.now(), companion: this.companion, tasks: this.visibleTasks(this.companion.provider),
       progress: this.tasks.progress(this.companion.provider), settings,
       secrets: { ...this.storage.describeSecrets(), notionTokenSet: !!this.storage.loadNotionToken() },
       diagnostics, camera: this.camera.status(), providers: { canvas: this.canvasSync.status(), notion: this.notionSync.status() },
@@ -195,6 +212,8 @@ export class Application {
       if (body.clearToken === true) this.storage.saveCanvasPersonalToken(null);
       if (!parsed && previous) this.storage.saveCanvasPersonalToken(null);
       this.storage.updateSettings(settings => { settings.canvas.baseUrl = parsed?.ok ? parsed.origin : ''; });
+      // No token (or a different school): nothing from the old Canvas account may remain.
+      if (!this.connected('canvas') || (parsed?.ok && previous && parsed.origin !== previous)) this.forgetProvider('canvas');
       this.canvasSync.start();
     } else if (path === '/api/settings/notion') {
       if (this.notionSync.status().refreshing) throw new InputError('Wait for the current Notion refresh before changing settings.');
@@ -202,7 +221,11 @@ export class Application {
       if (id && !/^[a-f\d-]{32,36}$/i.test(id)) throw new InputError('Enter the Notion data source UUID.');
       if (token) { const error = checkApiCredential(token, 'Notion token'); if (error) throw new InputError(error); this.storage.saveNotionToken(token); }
       if (body.clearToken === true) this.storage.saveNotionToken(null);
-      s.notion.dataSourceId = id; this.notionSync.start();
+      const previousSource = s.notion.dataSourceId;
+      s.notion.dataSourceId = id;
+      // No token / data source, or a different data source: nothing from the old one may remain.
+      if (!this.connected('notion') || (previousSource && id.toLowerCase() !== previousSource.toLowerCase())) this.forgetProvider('notion');
+      this.notionSync.start();
     } else if (path === '/api/settings/spotify') {
       this.cvMusic.stop();
       try { this.spotify.configure(string(body.clientId).trim()); }

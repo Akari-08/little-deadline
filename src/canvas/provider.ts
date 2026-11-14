@@ -69,6 +69,15 @@ export class CanvasTaskProvider implements TaskProvider {
     return config.ok && config.origin === this.stateOrigin ? this.snapshot : null;
   }
 
+  /** Drop the in-memory snapshot and health (credentials were removed). */
+  forget(): void {
+    this.stateOrigin = null;
+    this.snapshot = null;
+    this.lastSuccessAt = null;
+    this.health = 'ready';
+    this.message = null;
+  }
+
   async refresh(signal?: AbortSignal): Promise<ProviderSnapshot> {
     const config = this.config();
     if (!config.ok) {

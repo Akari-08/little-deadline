@@ -247,6 +247,19 @@ export class TaskStore extends Emitter<TaskStoreEvents> {
     this.commit(newlyDone);
   }
 
+  /**
+   * Forget everything held for a remote provider: its snapshot and the local state of its items.
+   * Used when the user removes that provider's credentials, so no copy of the remote data remains.
+   */
+  forgetProvider(provider: Exclude<TaskProviderId, 'mock'>): void {
+    const prefix = `${provider}:`;
+    const hadLocal = Object.keys(this.data.local).some(id => id.startsWith(prefix));
+    if (!this.data.snapshots[provider] && !hadLocal) return;
+    delete this.data.snapshots[provider];
+    for (const id of Object.keys(this.data.local)) if (id.startsWith(prefix)) delete this.data.local[id];
+    this.commit([]);
+  }
+
   // --- Internals ------------------------------------------------------------------
 
   private remoteViews(provider: Exclude<TaskProviderId, 'mock'>): TaskView[] {

@@ -26,6 +26,8 @@ export class NotionTaskProvider implements TaskProvider {
     const c = this.config();
     return c.token && /^[a-f\d-]{32,36}$/i.test(c.dataSourceId) ? this.info : { ...this.info, health: 'unconfigured', message: 'Add a Notion connection token and data source ID. Read-only import.' };
   }
+  /** Credentials were removed: drop the remembered health/message. */
+  forget(): void { this.info = { provider: 'notion', label: 'Notion', health: 'ready', message: 'Configured; not refreshed yet.', lastSuccessAt: null }; }
   async refresh(signal?: AbortSignal): Promise<ProviderSnapshot> {
     const { token, dataSourceId } = this.config();
     if (!token || !/^[a-f\d-]{32,36}$/i.test(dataSourceId)) throw new ProviderAuthError('Configure Notion first.');

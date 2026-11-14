@@ -81,4 +81,6 @@ export interface TaskProvider {
    * any other Error for transient failures. Must honour `signal` (timeouts/cancel).
    */
   refresh(signal?: AbortSignal): Promise<ProviderSnapshot>;
+  /** Optional: drop any in-memory copy of remote data (credentials were removed). */
+  forget?(): void;
 }
