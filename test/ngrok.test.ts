@@ -44,3 +44,31 @@ test('server serves ngrok hosts without login but still refuses other hosts and 
     await app.dispose(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('Spotify sign-in works through an ngrok tunnel with an https redirect URI', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lil-deadline-ngrok-'));
+  const app = new Application(new AppStorage(dir), { geminiApiKey: null });
+  const root = join(dir, 'public'); mkdirSync(root); writeFileSync(join(root, 'index.html'), '<!doctype html><title>t</title>');
+  const server = createAppServer(app, { root }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const port = (server.address() as { port: number }).port;
+  const tunnel = 'demo-1.ngrok-free.app';
+  const post = (path: string, body: unknown) => send(port, path, { Host: tunnel, Origin: `https://${tunnel}`, 'Content-Type': 'application/json', 'X-Lil-Deadline': '1' }, 'POST', JSON.stringify(body));
+  try {
+    assert.equal((await post('/api/settings/spotify', { clientId: 'a'.repeat(32) })).status, 200);
+    const authorize = await post('/api/spotify/authorize', {});
+    assert.equal(authorize.status, 200, authorize.text);
+    const url = new URL((JSON.parse(authorize.text) as { url: string }).url);
+    assert.equal(url.searchParams.get('redirect_uri'), `https://${tunnel}/api/spotify/callback`);
+    let seenOrigin = '';
+    app.spotify.callback = async (_params, origin) => { seenOrigin = origin; };
+    const callback = await send(port, '/api/spotify/callback?code=c&state=s', { Host: tunnel, 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' });
+    assert.equal(callback.status, 303);
+    assert.equal(seenOrigin, `https://${tunnel}`, 'callback is matched against the same https tunnel origin');
+    // The service itself refuses non-loopback http and non-ngrok https origins.
+    assert.throws(() => app.spotify.authorizeUrl(`http://${tunnel}`), /127\.0\.0\.1 address or your ngrok/);
+    assert.throws(() => app.spotify.authorizeUrl('https://evil.example'), /127\.0\.0\.1 address or your ngrok/);
+    assert.match(app.spotify.authorizeUrl(`http://127.0.0.1:${port}`), /redirect_uri=http%3A%2F%2F127\.0\.0\.1/);
+  } finally {
+    await app.dispose(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); rmSync(dir, { recursive: true, force: true });
+  }
+});
